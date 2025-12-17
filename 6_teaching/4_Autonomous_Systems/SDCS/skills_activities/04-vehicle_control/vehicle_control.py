@@ -38,15 +38,15 @@ controllerUpdateRate = 100
 # - v_ref: desired velocity in m/s
 # - K_p: proportional gain for speed controller
 # - K_i: integral gain for speed controller
-v_ref = 0.9
-K_p = 0
-K_i = 0
+v_ref = 1.0
+K_p = 0.1
+K_i = 0.5
 
 # ===== Steering Controller Parameters
 # - enableSteeringControl: whether or not to enable steering control
 # - K_stanley: K gain for stanley controller
 # - nodeSequence: list of nodes from roadmap. Used for trajectory generation.
-enableSteeringControl = False
+enableSteeringControl = True
 K_stanley = 0
 nodeSequence = [10, 4, 20, 10]
 
@@ -99,9 +99,10 @@ class SpeedController:
 
     # ==============  SECTION A -  Speed Control  ====================
     def update(self, v, v_ref, dt):
-
-
-        return 0
+        v = (v_ref - v) * self.kp
+        v += (v_ref - v) * dt * self.ki
+        print("v", v)
+        return v
     
 
 class SteeringController:
@@ -124,7 +125,15 @@ class SteeringController:
         wp_1 = self.wp[:, np.mod(self.wpi, self.N-1)]
         wp_2 = self.wp[:, np.mod(self.wpi+1, self.N-1)]
         
-        return 0
+        #code to compute heading angle to next waypoint
+        delta_phi = th
+        P = np.sqrt((wp_2[0] - wp_1[1])**2 + (wp_2[1] - wp_1[1])**2)
+        # print("P:", P, "wp_2:", wp_2, "wp_1:", wp_1, "th:", th, "delta_phi", delta_phi)
+        e = P * np.sin(th)
+        delta_e = np.arctan(self.k * e / (speed + 0.01))
+        delta = delta_phi + delta_e
+        delta = max(-self.maxSteeringAngle, min(self.maxSteeringAngle, delta))
+        return delta
 
 def controlLoop():
     #region controlLoop setup

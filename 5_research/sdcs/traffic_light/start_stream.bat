@@ -11,7 +11,7 @@ echo Response Code: %STATUS%
 
 rem Check if the request was successful
 if "%STATUS%"=="200" (
-    echo Stream started successfully.
+    echo Stream started successfully,
 ) else (
     echo Failed to start stream. Please check the IP address or if the Traffic light is connected to the correct network.
 )

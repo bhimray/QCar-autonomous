@@ -1,0 +1,21 @@
+ 
+Requirements and System Diagnostics Log 
+================================ 
+Language: Python, Mat/Sim 
+Platform: Virtual 
+QUARC: Not Required 
+QSDK: Required 
+QLabs: Required 
+MATLAB/Simulink: Required 
+Python: Required 
+ 
+User System 
+================================ 
+QUARC_user: Installed 
+QSDK_user: Not Installed 
+QLabs_user: Installed 
+MATLAB/Simulink_user: R2024a 
+Python_user: Not Installed 
+Visual Studio_user: 2022 
+ 
+STATUS: FAILED  
