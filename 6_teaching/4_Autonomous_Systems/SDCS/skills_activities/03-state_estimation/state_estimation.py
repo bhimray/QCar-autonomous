@@ -65,7 +65,6 @@ class QcarEKF:
         # - C: output matrix
 
         self.L = 0.257
-
         self.I = np.eye(3)
         self.xHat = x0
         self.P = P0
@@ -85,28 +84,74 @@ class QcarEKF:
         # - u[0] = v (speed in [m/s])
         # - u[1] = delta (steering Angle in [rad])
         # - dt: change in time since last update
+        # Ensure X is a 1D array of scalars (handles column vectors)
+        Xv = np.asarray(X).ravel()
+        theta = float(Xv[2])
+        v = float(u[0])
+        delta = float(u[1])
 
-        return X
+        beta = wrap_to_pi(np.arctan(0.5 * np.tan(delta)))
+        x_dot = v * np.cos(theta + beta)
+        y_dot = v * np.sin(theta + beta)
+        theta_dot = (v / self.L) * np.tan(delta)
+        theta_next = wrap_to_pi(theta + theta_dot * dt)
 
-
+        X_next = np.array([[Xv[0] + x_dot * dt], [Xv[1] + y_dot * dt], [theta_next]])
+        return X_next
 
     # ==============  SECTION B -  Motion Model Jacobian ====================
     def Jf(self, X, u, dt):
         # Jacobian for the kinematic bicycle model (see self.f)
- 
-        return np.eye(3)
+        # Convert inputs to scalars to avoid array-shaped elements
+        Xv = np.asarray(X).ravel()
+        theta = float(Xv[2])
+        v = float(u[0])
+        delta = float(u[1])
+
+        beta = wrap_to_pi(np.arctan(0.5 * np.tan(delta)))
+        phi = theta + beta
+
+        # d(beta)/d(delta)
+        dbeta_ddelta = 0.5 / (np.cos(delta)**2 + 0.25 * np.sin(delta)**2)
+
+        # Continuous-time Jacobians (partials)
+        A = np.array([
+            [0.0, 0.0, -v * np.sin(phi)],
+            [0.0, 0.0,  v * np.cos(phi)],
+            [0.0, 0.0,  0.0]
+        ])
+
+        B = np.array([
+            [np.cos(phi), -v * np.sin(phi) * dbeta_ddelta],
+            [np.sin(phi),  v * np.cos(phi) * dbeta_ddelta],
+            [0.0,          0.0]
+        ])
+
+        # Discretize using first-order approximation: F = I + A*dt, G = B*dt
+        F = self.I + A * dt
+        G = B * dt
+        return F, G
 
     # ==============  SECTION C -  Motion Model Prediction ====================
     def prediction(self, dt, u):
+        # 1) state prediction
+        self.xHat = self.f(self.xHat, u, dt)
 
-        return
-
+        # 2) covariance prediction
+        F, G = self.Jf(self.xHat, u, dt)   # (G optional)
+        self.P = F @ self.P @ F.T + self.Q
 
     # ==============  SECTION D -  Measurement correction ====================
 
     def correction(self, y):
-        
-        return
+       # y must be shape (3,1)
+        y = np.asarray(y).reshape(-1, 1)
+
+        S = self.C @ self.P @ self.C.T + self.R
+        K = self.P @ self.C.T @ np.linalg.inv(S)
+
+        self.xHat = self.xHat + K @ (y - self.C @ self.xHat)
+        self.P = (self.I - K @ self.C) @ self.P
 
 
 class GyroKF:
@@ -145,13 +190,29 @@ class GyroKF:
 
     # ==========  SECTION F -  Gyro Heading Prediction  ================
     def prediction(self, dt, u):
-        # - dt: change in time since last prediction
-        # - u: most recent gyroscope measurement
+        # Discrete-time state prediction
+        theta = self.xHat[0,0]
+        bias  = self.xHat[1,0]
+
+        theta_next = wrap_to_pi(theta + (u - bias) * dt)
+        bias_next  = bias
+
+        self.xHat = np.array([[theta_next],
+                            [bias_next]])
+
+        # Discrete-time covariance prediction
+        F = self.I + self.A * dt
+        self.P = F @ self.P @ F.T + self.Q
         pass
+
     
     # ==========  SECTION G -  GPS Heading Correction  ================
     def correction(self, y):
         # - y: heading measurement from GPS
+        S = self.C @ self.P @ self.C.T + self.R
+        K = self.P @ self.C.T @ np.linalg.inv(S)
+        self.xHat = self.xHat + K @ (y - self.C @ self.xHat)
+        self.P = (self.I - K @ self.C) @ self.P
         pass
 
 def controlLoop():
@@ -192,7 +253,7 @@ def controlLoop():
         R=np.diagflat([.1])
     )
 
-    # 3.b EKF combining bicycle model with GPS pos. and KF heading estimate
+    # 3.b EKF combining bicycle model with GPS position and KF heading estimate
     C_combined = np.eye(3)
     C_headingOnly = np.array([[0, 0, 1]])
     R_combined = np.diagflat([0.8, 0.8, 0.01])
@@ -224,7 +285,7 @@ def controlLoop():
             # Read from QCar sensors
             qcar.read()
             speed_tach = qcar.motorTach
-            th_gyro = qcar.gyroscope[2]
+            th_gyro = wrap_to_pi(qcar.gyroscope[2])
 
             # Update and write QCar control values
             # - u: throttle [%]. Shouldn't exceed 0.2 percent
@@ -236,28 +297,37 @@ def controlLoop():
 
             # ======= Section For enabling Kalman Filter Estimators =======
             ekf_dr.prediction(dt, [speed_tach, delta])
-            # ekf_gps.prediction(dt, [speed_tach, delta])
-            # ekf_sf.prediction(dt, [speed_tach, delta])
-            # kf.prediction(dt, th_gyro)
+            ekf_gps.prediction(dt, [speed_tach, delta])
+            ekf_sf.prediction(dt, [speed_tach, delta])
+            kf.prediction(dt, th_gyro)
 
             #region : Correction Update for Filters
             if gps.readGPS():
                 # ==========  SECTION E -  Measurement Update  ================
                 '''
                 # Collect new GPS readings
-
                 '''
                 ekf_sf.C = C_combined
                 ekf_sf.R = R_combined
+                
                 # Correction for estimator 3.a using GPS
-                '''
-                kf.correction(th_gps)
-                '''
+                position = gps.position
+                th_gps = wrap_to_pi(float(gps.orientation[2]))
+                y = th_gps
+                kf.correction(y)
 
                 # Correction for estimator 3.b using GPS and heading estimate
+                y = np.array([[position[0]], [position[1]], [th_gps]])
+                ekf_sf.correction(y)
+                
 
             else:
                 # Correction for 3.b using only heading estimate
+                ekf_sf.C = C_headingOnly
+                ekf_sf.R = R_headingOnly
+                # Correction for estimator 3.b using only heading estimate
+                th_kf = wrap_to_pi(float(kf.xHat[0,0]))
+                ekf_sf.correction(np.array([[th_kf]]))
                 pass
 
             #endregion

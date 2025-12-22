@@ -38,7 +38,15 @@ class ImageInterpretation():
         self.sampleRate     = 1/self.frameRate
         self.calibFinished  = False
 
+        # Camera calibration for front csi
+        # CSI camera intrinsic matrix at resolution [820, 410] is:
+        # [[1. 0. 0.]
+        #  [0. 1. 0.]
+        #  [0. 0. 1.]]
+        # CSI camera distortion parameters at resolution [820, 410] are:
+        # [[1. 1. 1. 1. 1.]]
         # List of camera intrinsic properties :
+        
         self.CSICamIntrinsics = np.eye(3, 3, dtype=np.float32)
         # CSI camera intrinsic matrix at resolution [820, 410] is:
         # [[318.86    0.00  401.34]
@@ -231,7 +239,7 @@ class ImageInterpretation():
             linesImage, lines = image, []
 
             print("Display image with lines found... ")
-            imageDisplayed = image
+            imageDisplayed = linesImage
 
             # Use cv2 to display current image
             cv2.imshow("Lines Image", imageDisplayed)
@@ -284,7 +292,8 @@ def main():
         - Calibrate   (interfacing skill activity)
         - Line Detect (line detection skill activity)
         '''
-        camMode = "Calibrate"
+        # camMode = "Calibrate"
+        camMode = "Line Detect"
 
         # ========= SECTION D - Camera Intrinsics and Distortion Coeffs. =========
         cameraMatrix  = np.array([

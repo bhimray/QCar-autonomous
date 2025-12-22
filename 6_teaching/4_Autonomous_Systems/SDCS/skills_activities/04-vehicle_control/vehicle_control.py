@@ -47,7 +47,7 @@ K_i = 0.5
 # - K_stanley: K gain for stanley controller
 # - nodeSequence: list of nodes from roadmap. Used for trajectory generation.
 enableSteeringControl = True
-K_stanley = 0
+K_stanley = 1.0
 nodeSequence = [10, 4, 20, 10]
 
 # Define the calibration pose
@@ -101,7 +101,7 @@ class SpeedController:
     def update(self, v, v_ref, dt):
         v = (v_ref - v) * self.kp
         v += (v_ref - v) * dt * self.ki
-        print("v", v)
+        # print("v", v)
         return v
     
 
@@ -120,20 +120,61 @@ class SteeringController:
         self.p_ref = (0, 0)
         self.th_ref = 0
 
-    # ==============  SECTION B -  Steering Control  ====================
+        # ==============  SECTION B -  Steering Control  ====================
     def update(self, p, th, speed):
+        # Current segment waypoints
         wp_1 = self.wp[:, np.mod(self.wpi, self.N-1)]
-        wp_2 = self.wp[:, np.mod(self.wpi+1, self.N-1)]
-        
-        #code to compute heading angle to next waypoint
-        delta_phi = th
-        P = np.sqrt((wp_2[0] - wp_1[1])**2 + (wp_2[1] - wp_1[1])**2)
-        # print("P:", P, "wp_2:", wp_2, "wp_1:", wp_1, "th:", th, "delta_phi", delta_phi)
-        e = P * np.sin(th)
-        delta_e = np.arctan(self.k * e / (speed + 0.01))
-        delta = delta_phi + delta_e
-        delta = max(-self.maxSteeringAngle, min(self.maxSteeringAngle, delta))
+        wp_2 = self.wp[:, np.mod(self.wpi + 1, self.N-1)]
+
+        # Segment direction and heading
+        seg = wp_2 - wp_1
+        seg_len2 = float(seg @ seg) + 1e-9
+        th_path = np.arctan2(seg[1], seg[0])
+
+        # Progress along segment (projection)
+        p_vec = p - wp_1
+        s = float((p_vec @ seg) / seg_len2)
+
+        # Move to next segment if we passed the current one
+        if s >= 1.0:
+            self.wpi += 1
+            if self.cyclic:
+                self.wpi = int(np.mod(self.wpi, self.N-1))
+            else:
+                self.wpi = min(self.wpi, self.N-2)
+
+            wp_1 = self.wp[:, np.mod(self.wpi, self.N-1)]
+            wp_2 = self.wp[:, np.mod(self.wpi + 1, self.N-1)]
+            seg = wp_2 - wp_1
+            seg_len2 = float(seg @ seg) + 1e-9
+            th_path = np.arctan2(seg[1], seg[0])
+            p_vec = p - wp_1
+            s = float((p_vec @ seg) / seg_len2)
+
+        # Reference point on the path (closest point on the segment)
+        s_clip = np.clip(s, 0.0, 1.0)
+        p_proj = wp_1 + s_clip * seg
+
+        # Cross-track error (signed)
+        # sign from 2D cross product (seg x (p - proj))
+        cross_z = seg[0] * (p[1] - p_proj[1]) - seg[1] * (p[0] - p_proj[0])
+        e_s = np.sign(cross_z) * np.linalg.norm(p - p_proj)
+
+        # Heading error
+        psi_s = wrap_to_pi(th_path - th)
+
+        # Stanley control with softening to avoid v->0 issues
+        kv = 0.1
+        delta = psi_s + np.arctan2(self.k * e_s, kv + max(0.0, speed))
+
+        # Save references for plotting
+        self.p_ref = (float(p_proj[0]), float(p_proj[1]))
+        self.th_ref = float(th_path)
+
+        # Saturate steering
+        delta = float(np.clip(delta, -self.maxSteeringAngle, self.maxSteeringAngle))
         return delta
+
 
 def controlLoop():
     #region controlLoop setup
