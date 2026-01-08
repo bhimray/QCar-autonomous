@@ -16,6 +16,7 @@ from threading import Thread, Lock
 import time
 import pyqtgraph as pg
 import signal
+import KinematicBicycleMPC
 
 from pal.products.qcar import QCar, QCarGPS, IS_PHYSICAL_QCAR, QCAR_CONFIG
 from pal.utilities.scope import MultiScope
@@ -65,7 +66,7 @@ x_hat = initialPose
 t_hat = 0
 
 if not IS_PHYSICAL_QCAR:
-    import qlabs_setup
+    import main_setup as qlabs_setup
     from qvl.qcar import QLabsQCar
     hQCar = qlabs_setup.setup(
         initialPosition=[initialPose[0], initialPose[1], 0],
@@ -315,6 +316,23 @@ class OccupancyGrid:
         pass
 
 
+def build_reference(waypoints_xy, x, y, N, ds=0.05, v_ref=0.3):
+    # waypoints_xy: shape (2, M)
+    W = waypoints_xy.T  # (M,2)
+    p = np.array([x, y])
+    d = np.linalg.norm(W - p[None,:], axis=1)
+    k0 = int(np.argmin(d))
+
+    # take next N+1 points (wrap or clamp)
+    idx = np.clip(np.arange(k0, k0 + (N+1)), 0, W.shape[0]-1)
+    P = W[idx].T  # (2, N+1)
+
+    # heading reference from segment direction
+    dP = np.diff(P, axis=1, prepend=P[:, [0]])
+    th = np.arctan2(dP[1], dP[0])
+    v = np.full(N+1, v_ref)
+    return P, th, v
+
 def controlLoop():
     #region controlLoop setup
     global KILL_THREAD, x_hat, t_hat
@@ -353,7 +371,8 @@ def controlLoop():
     #region QCar interface setup
     with lock:
         ekf = QCarEKF(x_0=x_hat)
-    driveController = QCarDriveController(waypointSequence, cyclic=False)
+    # driveController = QCarDriveController(...)
+    mpc = KinematicBicycleMPC.KinematicBicycleMPC(N=12, Ts=1.0/controllerUpdateRate, L=0.256)
 
     qcar = QCar(readMode=1, frequency=controllerUpdateRate)
     #endregion
@@ -393,17 +412,27 @@ def controlLoop():
                 t_hat = time.time()
                 x_hat = ekf.x_hat[:]
 
-            x = ekf.x_hat[0, 0]
-            y = ekf.x_hat[1, 0]
+            x = qcar.gyroscope[0]
+            y = qcar.gyroscope[1]
             v = qcar.motorTach
-            th = ekf.x_hat[2, 0]
+            th = qcar.gyroscope[2]
             p = np.array([x, y]) + np.array([np.cos(th), np.sin(th)]) * 0.2
 
             if t < startDelay or (not enableVehicleControl):
                 u = 0
                 delta = 0
             else:
-                u, delta = driveController.update(p, th, v, v_ref, dt)
+                # x0 for MPC
+                x0_mpc = np.array([x, y, th, float(v)])
+                Pref, Thref, Vref = build_reference(waypointSequence, p[0], p[1],
+                                                    N=mpc.N, v_ref=v_ref)
+                a_cmd, delta = mpc.solve(x0_mpc, Pref, Thref, Vref)
+
+                # Map MPC accel to QCar throttle command
+                # (You’ll need a calibration / mapping. Start simple.)
+                u = np.clip(a_cmd, -0.3, 0.3)
+                print(delta, a_cmd, u)
+
             qcar.write(u, delta)
             #endregion
 
@@ -417,9 +446,8 @@ def controlLoop():
 
                 count = 0
             #endregion
-
-            if driveController.steeringController.pathComplete:
-                return
+            # if driveController.steeringController.pathComplete:
+            #     return
             continue
         with lock:
             print('Control thread terminated')
@@ -543,19 +571,19 @@ if __name__ == '__main__':
 
     #region : Setup threads, then run experiment
     controlThread = Thread(target=controlLoop)
-    mappingThread = Thread(target=mappingLoop)
+    # mappingThread = Thread(target=mappingLoop)
 
     controlThread.start()
-    mappingThread.start()
+    # mappingThread.start()
 
     try:
-        while controlThread.is_alive() and mappingThread.is_alive():
-            MultiScope.refreshAll()
+        while controlThread.is_alive() :
+            # MultiScope.refreshAll()
             time.sleep(0.01)
     finally:
         KILL_THREAD = True
         controlThread.join()
-        mappingThread.join()
+        # mappingThread.join()
         gps.terminate()
     #endregion
 

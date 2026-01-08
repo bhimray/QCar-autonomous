@@ -145,7 +145,6 @@ class sensorInterfacing():
 
             time.sleep(15)
 
-
         if mode == "sensor_stats":
             self.mode = mode
             mainThread = Thread(target=self.sensor_read)

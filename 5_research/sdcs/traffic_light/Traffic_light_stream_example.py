@@ -15,7 +15,7 @@ import numpy as np
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
 
 ## -- -- -TRAFFIC LIGHT IP- -- -- 
-light_ip = '192.168.2.3'
+light_ip = '192.168.1.122'
 # -- -- -- -- -- -- -- -- -- -- --
 
 ## Initialize the traffic light

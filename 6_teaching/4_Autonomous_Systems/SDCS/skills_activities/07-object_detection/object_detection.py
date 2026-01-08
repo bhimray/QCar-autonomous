@@ -30,8 +30,8 @@ print('Sample Time: ', sampleTime)
 # - task: Specify the task of the script. 'threshold' or 'detect' or 'classify'.
 # - mode: Specify the mode of the task. 'hsv' or 'rgb' for 'threshold'.
 #         'shape' or 'template' or 'yolo' for 'classify'.
-task = 'threshold'
-mode = 'rgb'
+task = 'classify'  # 'threshold' or 'detect' or 'classify'
+mode = 'yolo'    # 'hsv' or 'rgb' for 'threshold'
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 #region : Initial Setup

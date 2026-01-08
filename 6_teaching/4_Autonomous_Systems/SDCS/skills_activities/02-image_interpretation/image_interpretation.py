@@ -7,6 +7,7 @@ Skills activity code for image interpretation lab guide.
 Students will perform camera calibration along with line detection.
 Please review Lab Guide - Image Interpretation PDF
 """
+from networkx import edges
 from pal.products.qcar import QCarCameras,QCarRealSense, IS_PHYSICAL_QCAR
 from hal.utilities.image_processing import ImageProcessing
 import time
@@ -228,15 +229,29 @@ class ImageInterpretation():
 
             # ============= SECTION C1 - Image Correction =============
             print("Implement image correction for raw camera image... ")
-            undistortedImage = image
+            if cameraIntrinsics is not None and cameraDistortion is not None: 
+                undistortedImage = cv2.undistort(image, cameraIntrinsics, cameraDistortion) 
+            else: 
+                undistortedImage = image.copy()
 
             # ============= SECTION C2 - Image Filtering =============
             print("Implement image filter on distortion corrected image... ")
-            filteredImage = image
+            gray = cv2.cvtColor(undistortedImage, cv2.COLOR_BGR2GRAY) 
+            blur = cv2.GaussianBlur(gray, (5,5), 0) 
+            # reduces noise 
+            # Use Canny for crisp edges; thresholds are tunable low_thresh, 
+            low_thresh, high_thresh = 50, 150 
+            filteredImage = cv2.Canny(blur, low_thresh, high_thresh)
 
             # ============= SECTION C3 - Feature Extraction =============
             print("Extract line information from filtered image... ")
-            linesImage, lines = image, []
+            lines = cv2.HoughLinesP(filteredImage, rho=1, theta=np.pi/180, threshold=50, minLineLength=40, maxLineGap=10) 
+            linesImage = undistortedImage.copy() 
+            detected_lines = [] 
+            if lines is not None: 
+                for x1,y1,x2,y2 in lines.reshape(-1,4): 
+                    cv2.line(linesImage, (x1,y1), (x2,y2), (0,255,0), 2) 
+                    detected_lines.append(((x1,y1),(x2,y2)))
 
             print("Display image with lines found... ")
             imageDisplayed = linesImage

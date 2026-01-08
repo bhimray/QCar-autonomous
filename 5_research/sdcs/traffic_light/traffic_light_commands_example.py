@@ -11,7 +11,7 @@ import time
 
 # Provide the Traffic Light IP address
 ## -- -- -TRAFFIC LIGHT IP- -- -- 
-light_ip = '192.168.2.3'
+light_ip = '192.168.1.122'
 # -- -- -- -- -- -- -- -- -- -- --
 
 # Initialize a Traffic Light with its corresponding IP

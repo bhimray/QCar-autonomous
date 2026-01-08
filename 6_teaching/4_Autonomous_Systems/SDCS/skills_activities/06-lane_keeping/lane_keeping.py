@@ -7,6 +7,7 @@ lane_keeping.py
 Skills activity code for lane keeping lab guide.
 Please review the accompanying "Lab Guide - Lane Keeping" PDF
 """
+from matplotlib import image
 from pal.utilities.keyboard import PygameKeyboardDrive,PygameKeyboard
 # from pal.products.qcar import QCarRealSense,QCar
 from hal.content.qcar import QCarRealSense,QCar
@@ -120,10 +121,36 @@ try:
         
         # ==============  SECTION A -  Lane Marking  ====================
         laneMarking = np.zeros((480,640),dtype=np.uint8)
+        # if cameraIntrinsics is not None and cameraDistortion is not None: 
+        #     undistortedImage = cv2.undistort(image, cameraIntrinsics, cameraDistortion) 
+        # else: 
+        #     undistortedImage = image.copy()
+
+        # ============= SECTION C2 - Image Filtering =============
+        print("Implement image filter on distortion corrected image... ")
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) 
+        blur = cv2.GaussianBlur(gray, (5,5), 0) 
+        # reduces noise 
+        # Use Canny for crisp edges; thresholds are tunable low_thresh, 
+        low_thresh, high_thresh = 20, 150 
+        filteredImage = cv2.Canny(blur, low_thresh, high_thresh)
+
+        # ============= SECTION C3 - Feature Extraction =============
+        print("Extract line information from filtered image... ")
+        lines = cv2.HoughLinesP(filteredImage, rho=1, theta=np.pi/180, threshold=10, minLineLength=40, maxLineGap=10) 
+        linesImage = img.copy() 
+        if lines is not None: 
+            for x1,y1,x2,y2 in lines.reshape(-1,4): 
+                cv2.line(linesImage, (x1,y1), (x2,y2), (0,255,0), 2) 
+                cv2.line(laneMarking, (x1,y1), (x2,y2), 255, 2)
+        print("Display image with lines found... ")
+        imageDisplayed = linesImage
+        
+
         # ==============       END OF SECTION A      ====================
 
         # Creating Bird's-Eye view of Camera Feed and Lane Markings
-        bev = myLaneKeeping.ipm.create_bird_eye_view(img)
+        bev = myLaneKeeping.ipm.create_bird_eye_view(imageDisplayed)
         bevLaneMarking = myLaneKeeping.ipm.create_bird_eye_view(laneMarking)
 
         # Process Lane Markings and Extract Availabe Lane Centers (Pure Pursuit Targets)
@@ -158,11 +185,11 @@ try:
         qcar.write(throttle=throttle,steering=steering)
 
         # Visualization       
-        cv2.imshow("camera", img)
+        cv2.imshow("camera", imageDisplayed)
         cv2.imshow("lane marking", laneMarking)
-        # cv2.imshow("camera BEV", bev)
-        # cv2.imshow("lane marking BEV",bevLaneMarking)
-        # cv2.imshow("processed BEV",processedLaneMarking)
+        cv2.imshow("camera BEV", bev)
+        cv2.imshow("lane marking BEV",bevLaneMarking)
+        cv2.imshow("processed BEV",processedLaneMarking)
         # for i,blob in enumerate(isolated):
         #     cv2.imshow('blob'+str(i),blob)
         # myLaneKeeping.show_debug()
