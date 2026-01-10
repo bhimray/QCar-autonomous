@@ -120,6 +120,9 @@ def setup(
 
     yieldSigns.spawn(location =[0.4,-13, 0],
                         rotation=[0,0,np.pi])
+    # 24.328, 6.874, 0.2
+    yieldSigns.spawn(location =[24.328, 6.874, 0.2],
+                        rotation=[0,0, -np.pi/2])
      # endregion
 
     # region: roundabout
@@ -192,6 +195,10 @@ def setup(
     stop = QLabsStopSign(qlabs)
     stop.spawn(location=[-0.508, -7.327, 0.2], rotation=[0,0, np.pi/2],
             scale=[1,1,1], configuration=0, waitForConfirmation=True)
+    
+    # -11.286, 46.586, 0.2
+    stop.spawn(location=[-11.286, 46.586, 0.2], rotation=[0,0,0],
+            scale=[1,1,1], configuration=0, waitForConfirmation=True)
     # endregion
 
     # Start spawn model
@@ -200,9 +207,9 @@ def setup(
 
     return hqcar
 
-# def terminate():
-#     QLabsRealTime().terminate_real_time_model("QCar_Workspace")
-#     QLabsRealTime().terminate_real_time_model("QCar2_Workspace")
+def terminate():
+    QLabsRealTime().terminate_real_time_model("QCar_Workspace")
+    QLabsRealTime().terminate_real_time_model("QCar2_Workspace")
 
 if __name__ == '__main__':
     # XXX Add processing of command line arguments

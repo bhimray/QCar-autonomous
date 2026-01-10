@@ -182,14 +182,16 @@ def mappingLoop():
 def objectDetectionLoop():
     global detected_objects
     
-    while True:
+    # Initialize the model once; reloading every frame is expensive
+    myDetector.yolo = YOLOv8()
+
+    while not KILL_THREAD:
         #Loop Timing Update
         start = time.time()
 
         task = 'classify'  # 'threshold' or 'detect' or 'classify'
         mode = 'yolo'    # 'hsv' or 'rgb' for 'threshold'
         
-        myDetector.yolo  = YOLOv8()
         qcarImg.read()
         img = qcarImg.rgb
         depth = qcarImg.depth
@@ -325,7 +327,7 @@ def controlLoop():
         waypointSequence,
         cyclic=False
     )
-
+    print("waypointSequence", waypointSequence[0,:].shape)
     with qcar:
         t0 = time.time()
         t  = 0.0
@@ -382,15 +384,9 @@ def controlLoop():
                     names, boxes, dists = detected_objects
                     if "stop sign" in names:
                         print("Stop Sign Detected - Stopping QCar", names, dists)
-                        if dists[0] < 1.0:
-                            u = 0.5
-                            delta = 0
-                        elif dists[0] < 0.2:
-                            u = 0
-                            delta = 0
-                            time.sleep(1.0)
-                        else:
-                            pass
+                        qcar.write(u, delta)
+                    elif "yield sign" in names:
+                        print("Yield Sign Detected - Slowing QCar", names, dists)
                         qcar.write(u, delta)
                     else:
                         qcar.write(u, delta)
