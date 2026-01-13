@@ -51,10 +51,10 @@ class LinearizedMPC:
         for k in range(N):
             cons += [X[k+1] == A_list[k] @ X[k] + B_list[k] @ U[k] + c_list[k]]
 
-            cons += [dmin <= U[k,0], U[k,0] <= dmax]
-            cons += [amin <= U[k,1], U[k,1] <= amax]
+            # cons += [dmin <= U[k,0], U[k,0] <= dmax]
+            # cons += [amin <= U[k,1], U[k,1] <= amax]
 
-            cons += [vmin <= X[k,3], X[k,3] <= vmax]
+            # cons += [vmin <= X[k,3], X[k,3] <= vmax]
 
             cons += [(U[k,0] - X[k,4]) / Ts >= drmin,
                      (U[k,0] - X[k,4]) / Ts <= drmax]

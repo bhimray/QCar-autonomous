@@ -13,6 +13,9 @@ import signal
 from ultralytics import YOLO
 from helperFunction.yoloObjectDetection import yoloObjectDetection
 from env_interpretation import EnvInterpretation
+from control.SQPMPCController import SQPMPCController
+from control.KinematicBicycleModel import KinematicBicycleModel
+import PathProgressTracker
 from pit.YOLO.nets import YOLOv8
 from pit.YOLO.utils import QCar2DepthAligned
 from hal.content.qcar_functions import ObjectDetection
@@ -323,9 +326,34 @@ def controlLoop():
     
     qcar = QCar(readMode=1, frequency=controllerUpdateRate)
     ekf  = QCarEKF(x_0=x_hat)
-    driveController = QCarDriveController(
-        waypointSequence,
-        cyclic=False
+    model=KinematicBicycleModel(
+            lf=0.1,
+            lr=0.1,
+            Ts=1.0/controllerUpdateRate)
+    bounds= {
+            "delta": (-np.pi/6, np.pi/6),
+            "a": (-1.0, 1.0),
+            "delta_rate": (-np.pi/3, np.pi/3),
+            "a_rate": (-2.0, 2.0),
+            "v": (0.0, 2.0)
+        }
+    weights= {
+            "Q": [10.0, 10.0, 5.0, 1.0],
+            "R": [1.0, 1.0],
+            "Rrate": [10.0, 10.0]
+        }
+    if waypointSequence is not None:
+        progressTracker = PathProgressTracker.PathProgressTracker(
+            waypointSequence
+        )
+    else:
+        progressTracker = None
+    driveController = SQPMPCController(
+        model,
+        N=10,
+        bounds=bounds,
+        weights=weights,
+        sqp_iters=2
     )
     print("waypointSequence", waypointSequence[0,:].shape)
     with qcar:
@@ -376,9 +404,17 @@ def controlLoop():
                 u = 0
                 delta = 0
             else:
-                u, delta = driveController.update(
-                    p, th, v, v_ref, dt,
+                progressTracker.update(x, y)
+                waypointIndices = progressTracker.get_reference_window(lookahead=0.2)
+                z_ref_xy = waypointSequence[:, waypointIndices].T
+                z_ref = np.hstack([z_ref_xy, np.zeros((z_ref_xy.shape[0], 2))])
+                # print("z_ref", z_ref, z_ref.shape, len(waypointIndices))
+                driveController.N = len(waypointIndices)
+                u, delta = driveController.compute_control(
+                    np.array([x, y, th, v, delta, u]),
+                    z_ref
                 )
+                # print(f"t={t:.2f}s, u={u:.2f} m/s, delta={delta:.2f} deg")
             with det_lock:
                 if detected_objects:
                     names, boxes, dists = detected_objects

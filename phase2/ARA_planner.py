@@ -2,7 +2,7 @@ import math
 import heapq
 from dataclasses import dataclass, field
 from typing import Dict, Tuple, List, Optional, Callable, Set, Any
-
+from hal.products.mats import SDCSRoadMap  # Quanser import
 
 # =========================
 # Utilities
@@ -489,7 +489,6 @@ def example_usage():
     """
 
     # 1) Roadmap setup
-    from hal.products.mats import SDCSRoadMap  # Quanser import
     roadmap = SDCSRoadMap()
 
     adapter = RoadmapAdapter(roadmap)
