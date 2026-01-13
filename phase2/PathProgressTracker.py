@@ -5,13 +5,23 @@ class PathProgressTracker:
     Tracks monotonic progress s_hat along a 2D waypoint path.
     """
 
-    def __init__(self, waypoints: np.ndarray):
-        """
-        waypoints: 2xN array [x; y]
-        """
-        assert waypoints.shape[0] == 2
-        self.waypoints = waypoints
-        self.s = self._compute_arc_length(waypoints)
+    # def __init__(self, waypoints: np.ndarray):
+    #     """
+    #     waypoints: 2xN array [x; y]
+    #     """
+    #     assert waypoints.shape[0] == 2
+    #     self.waypoints = waypoints
+    #     self.s = self._compute_arc_length(waypoints)
+    #     self.s_hat = 0.0
+    def __init__(self, waypoints):
+        # waypoints expected as (2, N) → convert to (N, 2)
+        self.waypoints = waypoints.T
+        self.N = self.waypoints.shape[0]
+
+        self.ds = np.linalg.norm(
+            np.diff(self.waypoints, axis=0), axis=1
+        )
+        self.s = np.concatenate(([0.0], np.cumsum(self.ds)))
         self.s_hat = 0.0
 
     # --------------------------------------------------
@@ -32,6 +42,27 @@ class PathProgressTracker:
         s_meas, d, idx = self.project(x, y)
         self.s_hat = max(self.s_hat, s_meas)
         return self.s_hat, s_meas, d, idx
+
+    def update_progress(self, x, y, v, theta, dt):
+        pos = np.array([x, y])
+
+        dists = np.linalg.norm(self.waypoints - pos, axis=1)
+        i = np.argmin(dists)
+
+        if i < len(self.waypoints) - 1:
+            t = self.waypoints[i+1] - self.waypoints[i]
+        else:
+            t = self.waypoints[i] - self.waypoints[i-1]
+
+        t = t / np.linalg.norm(t)
+
+        v_vec = v * np.array([np.cos(theta), np.sin(theta)])
+        forward_speed = np.dot(v_vec, t)
+
+        # 🔥 CRITICAL FIX
+        ds = max(forward_speed, 0.05) * dt
+
+        self.s_hat = min(self.s_hat + ds, self.s[-1])
 
     def get_reference_window(self, lookahead: float):
         """

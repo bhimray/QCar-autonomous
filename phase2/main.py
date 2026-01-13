@@ -45,7 +45,7 @@ sampleTime     = 1/sampleRate
 # - v_ref: desired velocity in m/s
 # - nodeSequence: list of nodes from roadmap. Used for trajectory generation.
 enableVehicleControl = True
-v_ref = 1.0
+v_ref = 3.0
 nodeSequence = [0, 20, 0]
 
 # ===== Occupancy Grid Parameters
@@ -121,6 +121,25 @@ qcarImg = QCar2DepthAligned()
 myDetector = yoloObjectDetection()
 
 KILL_THREAD = False
+
+#start region : reference building function
+def build_reference(waypoints, v_ref=2.0):
+    """
+    waypoints: (N,2) array [[x,y],...]
+    """
+    N = waypoints.shape[0]
+    z_ref = np.zeros((N, 4))
+
+    z_ref[:, 0:2] = waypoints
+    z_ref[:, 3] = v_ref
+
+    for k in range(N-1):
+        dx = waypoints[k+1,0] - waypoints[k,0]
+        dy = waypoints[k+1,1] - waypoints[k,1]
+        z_ref[k,2] = np.arctan2(dy, dx)
+
+    z_ref[-1,2] = z_ref[-2,2]
+    return z_ref
 
 def mappingLoop():
     global KILL_THREAD, x_hat, t_hat
@@ -329,18 +348,18 @@ def controlLoop():
     model=KinematicBicycleModel(
             lf=0.1,
             lr=0.1,
-            Ts=1.0/controllerUpdateRate)
+            Ts=controllerUpdateRate)
     bounds= {
             "delta": (-np.pi/6, np.pi/6),
             "a": (-1.0, 1.0),
             "delta_rate": (-np.pi/3, np.pi/3),
-            "a_rate": (-2.0, 2.0),
+            "a_rate": (-10.0, 10.0),
             "v": (0.0, 2.0)
         }
     weights= {
-            "Q": [10.0, 10.0, 5.0, 1.0],
+            "Q": [10.0, 10.0, 20.0, 50.0],
             "R": [1.0, 1.0],
-            "Rrate": [10.0, 10.0]
+            "Rrate": [7.0, 5.0]
         }
     if waypointSequence is not None:
         progressTracker = PathProgressTracker.PathProgressTracker(
@@ -370,7 +389,7 @@ def controlLoop():
 
             # --- Sensors ---
             qcar.read()
-            v = qcar.motorTach * 10
+            v = qcar.motorTach
 
             # --- EKF ---
             if gps.readGPS():
@@ -404,28 +423,33 @@ def controlLoop():
                 u = 0
                 delta = 0
             else:
-                progressTracker.update(x, y)
-                waypointIndices = progressTracker.get_reference_window(lookahead=0.2)
+                progressTracker.update_progress(x, y, v, th, dt)
+                waypointIndices = progressTracker.get_reference_window(lookahead=5.0)
                 z_ref_xy = waypointSequence[:, waypointIndices].T
-                z_ref = np.hstack([z_ref_xy, np.zeros((z_ref_xy.shape[0], 2))])
+                # z_ref = np.hstack([z_ref_xy, np.zeros((z_ref_xy.shape[0], 2))])
+                z_ref = build_reference(z_ref_xy, v_ref=v_ref)
                 # print("z_ref", z_ref, z_ref.shape, len(waypointIndices))
                 driveController.N = len(waypointIndices)
-                u, delta = driveController.compute_control(
+                delta, a = driveController.compute_control(
                     np.array([x, y, th, v, delta, u]),
                     z_ref
                 )
-                # print(f"t={t:.2f}s, u={u:.2f} m/s, delta={delta:.2f} deg")
-            with det_lock:
-                if detected_objects:
-                    names, boxes, dists = detected_objects
-                    if "stop sign" in names:
-                        print("Stop Sign Detected - Stopping QCar", names, dists)
-                        qcar.write(u, delta)
-                    elif "yield sign" in names:
-                        print("Yield Sign Detected - Slowing QCar", names, dists)
-                        qcar.write(u, delta)
-                    else:
-                        qcar.write(u, delta)
+                u = a
+                qcar.write(u, delta)
+                print(f"t={t:.2f}s, u={u:.2f} m/s, delta={delta:.2f} deg")
+            # with det_lock:
+            #     if detected_objects:
+            #         names, boxes, dists = detected_objects
+            #         if "stop sign" in names:
+            #             print("Stop Sign Detected - Stopping QCar", names, dists)
+            #             qcar.write(u, delta)
+            #         elif "yield sign" in names:
+            #             print("Yield Sign Detected - Slowing QCar", names, dists)
+            #             qcar.write(u, delta)
+            #         else:
+            #             qcar.write(u, delta)
+            #     else:
+            #         qcar.write(u, delta)
 
             # --- MultiScope ---
             #region : Update Scopes 
