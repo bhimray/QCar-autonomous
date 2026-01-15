@@ -13,16 +13,17 @@ class PathProgressTracker:
     #     self.waypoints = waypoints
     #     self.s = self._compute_arc_length(waypoints)
     #     self.s_hat = 0.0
-    def __init__(self, waypoints):
+    def __init__(self, waypoints, lookahead):
         # waypoints expected as (2, N) → convert to (N, 2)
         self.waypoints = waypoints.T
         self.N = self.waypoints.shape[0]
+        self.lookahead = lookahead
 
         self.ds = np.linalg.norm(
             np.diff(self.waypoints, axis=0), axis=1
         )
-        self.s = np.concatenate(([0.0], np.cumsum(self.ds)))
-        self.s_hat = 0.0
+        self.s = np.concatenate(([0.0], np.cumsum(self.ds))) # cumulative arc length (path length)
+        self.s_hat = 0.0 # distance covered
 
     # --------------------------------------------------
     # Public API
@@ -88,14 +89,15 @@ class PathProgressTracker:
         """
         p = np.array([x, y])
 
-        best_dist = float("inf")
+        best_dist = np.inf
         best_s = 0.0
         best_d = 0.0
         best_i = 0
 
-        for i in range(len(self.s) - 1):
-            p0 = self.waypoints[:, i]
-            p1 = self.waypoints[:, i + 1]
+        for i in range(self.N - 1):
+            p0 = self.waypoints[i]        # ✅ (2,)
+            p1 = self.waypoints[i + 1]    # ✅ (2,)
+
             v = p1 - p0
             w = p - p0
 
@@ -107,16 +109,18 @@ class PathProgressTracker:
             proj = p0 + t * v
 
             dist = np.linalg.norm(p - proj)
+
             if dist < best_dist:
                 best_dist = dist
                 best_s = self.s[i] + t * np.linalg.norm(v)
 
-                # signed lateral error (2D cross product)
+                # signed lateral error
                 cross = v[0] * (p[1] - proj[1]) - v[1] * (p[0] - proj[0])
                 best_d = np.sign(cross) * dist
                 best_i = i
 
         return best_s, best_d, best_i
+
 
     @staticmethod
     def _compute_arc_length(waypoints: np.ndarray):

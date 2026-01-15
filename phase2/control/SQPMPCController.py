@@ -26,18 +26,18 @@ class SQPMPCController:
         self.U_nom = np.zeros((self.N, self.nu))
         self.X_nom[0] = x0
 
-        delta0, a0 = x0[4], x0[5]
+        delta0, v0 = x0[4], x0[5]
         for k in range(self.N):
-            self.U_nom[k] = [delta0, a0]
+            self.U_nom[k] = [delta0, v0]
             self.X_nom[k+1] = self.model.step(self.X_nom[k], self.U_nom[k])
 
-    def compute_control(self, x0, zref, verbose=False):
+    def compute_control(self, x0, zref, uref, verbose=False):
         if self.X_nom is None:
             self.initialize_nominal(x0)
 
-        for _ in range(self.sqp_iters):
+        for i in range(self.sqp_iters):
             X_opt, U_opt = self.mpc.solve(
-                x0, zref, self.X_nom, self.U_nom, verbose
+                x0, zref, uref, self.X_nom, self.U_nom, verbose
             )
             self.X_nom = X_opt
             self.U_nom = U_opt

@@ -1,29 +1,3 @@
-"""
-CVXPY-based MPC for discretized kinematic bicycle model (nonlinear).
-We solve a convex QP by linearizing dynamics around a nominal trajectory each control step.
-
-States (augmented for rate constraints):
-    x = [px, py, psi, v, delta_prev, a_prev]
-Control:
-    u = [delta, a]
-
-Nonlinear discrete dynamics (Euler):
-    beta = atan((lr/(lf+lr)) * tan(delta))
-    px+  = px  + Ts*v*cos(psi + beta)
-    py+  = py  + Ts*v*sin(psi + beta)
-    psi+ = psi + Ts*(v/lr)*sin(beta)
-    v+   = v   + Ts*a
-    delta_prev+ = delta
-    a_prev+     = a
-
-QP MPC (paper-style):
-    min Σ ||z_k - zref_k||_Q^2 + Σ ||u_k||_R^2 + Σ ||(u_k-u_{k-1})/Ts||_Rrate^2
-    s.t. linearized dynamics, input bounds, rate bounds, (optional) v bounds
-
-Requires:
-    pip install cvxpy osqp numpy
-"""
-
 from __future__ import annotations
 import numpy as np
 import cvxpy as cp
@@ -273,9 +247,8 @@ if __name__ == "__main__":
     # Bounds (edit)
     bounds = {
         "delta": (-0.5, 0.5),          # rad
-        "a": (-3.0, 2.0),              # m/s^2
         "delta_rate": (-1.5, 1.5),     # rad/s
-        "a_rate": (-5.0, 5.0),         # m/s^3
+        "v_rate": (-5.0, 5.0),         # m/s^3
         "v": (0.0, 10.0),              # m/s
     }
 
@@ -305,7 +278,7 @@ if __name__ == "__main__":
         solver_verbose=False,
     )
 
-    print("u0 = [delta, a] =", u0)
+    print("u0 = [delta, v] =", u0)
 
     # Apply to nonlinear plant for next state (like in real loop)
     x_next = f_disc(x, u0, lf, lr, Ts)

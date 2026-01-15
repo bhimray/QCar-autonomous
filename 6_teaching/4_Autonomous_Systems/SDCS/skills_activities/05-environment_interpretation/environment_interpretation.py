@@ -404,6 +404,7 @@ def controlLoop():
                 delta = 0
             else:
                 u, delta = driveController.update(p, th, v, v_ref, dt)
+                print(f"u={u:.2f}, delta={delta:.3f} rad")
             qcar.write(u, delta)
             #endregion
 

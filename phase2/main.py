@@ -19,7 +19,7 @@ import PathProgressTracker
 from pit.YOLO.nets import YOLOv8
 from pit.YOLO.utils import QCar2DepthAligned
 from hal.content.qcar_functions import ObjectDetection
-
+from hal.utilities.control import StanleyController
 from pal.products.qcar import QCar, QCarRealSense, QCarGPS, IS_PHYSICAL_QCAR, QCAR_CONFIG
 from pal.utilities.scope import MultiScope
 from pal.utilities.math import find_overlap, wrap_to_2pi, wrap_to_pi
@@ -45,7 +45,7 @@ sampleTime     = 1/sampleRate
 # - v_ref: desired velocity in m/s
 # - nodeSequence: list of nodes from roadmap. Used for trajectory generation.
 enableVehicleControl = True
-v_ref = 3.0
+v_ref = 1.0
 nodeSequence = [0, 20, 0]
 
 # ===== Occupancy Grid Parameters
@@ -119,11 +119,12 @@ shared_vision = {
 
 qcarImg = QCar2DepthAligned()
 myDetector = yoloObjectDetection()
+lr = lf = 0.128 # meters
 
 KILL_THREAD = False
 
 #start region : reference building function
-def build_reference(waypoints, v_ref=2.0):
+def build_reference(waypoints, u_ref=None):
     """
     waypoints: (N,2) array [[x,y],...]
     """
@@ -131,7 +132,8 @@ def build_reference(waypoints, v_ref=2.0):
     z_ref = np.zeros((N, 4))
 
     z_ref[:, 0:2] = waypoints
-    z_ref[:, 3] = v_ref
+    if u_ref is not None:
+        z_ref[:, 3] = u_ref[:,1]  # set v reference
 
     for k in range(N-1):
         dx = waypoints[k+1,0] - waypoints[k,0]
@@ -318,6 +320,11 @@ def controlLoop():
     global KILL_THREAD, x_hat, t_hat
     u = 0 
     delta = 0 
+    Kp_v = 0.6
+    Ki_v = 0.3
+    v_int = 0.0
+    u_min, u_max = -0.3, 0.4   # safe limits; tune later
+
     # used to limit data sampling to 10hz 
     countMax = controllerUpdateRate / 10 
     count = 0
@@ -332,7 +339,7 @@ def controlLoop():
                         )
     arrow1.setPos(0,0) 
     scope.axes[1].plot.addItem(arrow1)
-    
+
     arrow2 = pg.ArrowItem( angle=180, 
                           tipAngle=60, 
                           headLen=10, 
@@ -345,25 +352,28 @@ def controlLoop():
     
     qcar = QCar(readMode=1, frequency=controllerUpdateRate)
     ekf  = QCarEKF(x_0=x_hat)
-    model=KinematicBicycleModel(
-            lf=0.1,
-            lr=0.1,
-            Ts=controllerUpdateRate)
-    bounds= {
+    Ts = 1.0 / controllerUpdateRate
+    model = KinematicBicycleModel(
+        lf=lr,
+        lr=lf,
+        Ts=Ts
+    )
+    bounds = {
             "delta": (-np.pi/6, np.pi/6),
-            "a": (-1.0, 1.0),
+            "v": (0.0, v_ref + 0.5),
             "delta_rate": (-np.pi/3, np.pi/3),
-            "a_rate": (-10.0, 10.0),
-            "v": (0.0, 2.0)
+            "v_rate": (-1.0, 1.0)
         }
+
     weights= {
-            "Q": [10.0, 10.0, 20.0, 50.0],
-            "R": [1.0, 1.0],
-            "Rrate": [7.0, 5.0]
+            "Q": [10.0, 10.0, 10.0, 30.0], # px, py, psi, v, delta_prev, v_prev
+            "R": [1.0, 1.0],              # delta, v
+            "Rrate": [1.0, 1.0]
         }
     if waypointSequence is not None:
         progressTracker = PathProgressTracker.PathProgressTracker(
-            waypointSequence
+            waypointSequence,
+            lookahead=2.0
         )
     else:
         progressTracker = None
@@ -372,9 +382,17 @@ def controlLoop():
         N=10,
         bounds=bounds,
         weights=weights,
-        sqp_iters=2
+        sqp_iters=5
     )
-    print("waypointSequence", waypointSequence[0,:].shape)
+    qcarController = QCarDriveController(
+        waypoints=waypointSequence,
+        cyclic=False
+        )
+
+    delta_prev = 0.0
+    v_prev     = 0.0
+    delta_cmd = 0.0
+    v_cmd     = 0.0
     with qcar:
         t0 = time.time()
         t  = 0.0
@@ -389,7 +407,7 @@ def controlLoop():
 
             # --- Sensors ---
             qcar.read()
-            v = qcar.motorTach
+            v_meas = qcar.motorTach
 
             # --- EKF ---
             if gps.readGPS():
@@ -402,7 +420,7 @@ def controlLoop():
                 y_gps = None
 
             ekf.update(
-                [qcar.motorTach, delta],
+                [qcar.motorTach, delta_cmd],
                 dt,
                 y_gps,
                 qcar.gyroscope[2]
@@ -420,23 +438,68 @@ def controlLoop():
 
             # --- Control ---
             if t < startDelay or not enableVehicleControl:
-                u = 0
-                delta = 0
+                delta_cmd = 0.0
+                v_cmd     = 0.0
             else:
-                progressTracker.update_progress(x, y, v, th, dt)
-                waypointIndices = progressTracker.get_reference_window(lookahead=5.0)
-                z_ref_xy = waypointSequence[:, waypointIndices].T
-                # z_ref = np.hstack([z_ref_xy, np.zeros((z_ref_xy.shape[0], 2))])
-                z_ref = build_reference(z_ref_xy, v_ref=v_ref)
-                # print("z_ref", z_ref, z_ref.shape, len(waypointIndices))
-                driveController.N = len(waypointIndices)
-                delta, a = driveController.compute_control(
-                    np.array([x, y, th, v, delta, u]),
-                    z_ref
+                
+                progressTracker.update_progress(
+                    p[0],
+                    p[1],
+                    v_meas,
+                    th,
+                    dt
                 )
-                u = a
-                qcar.write(u, delta)
-                print(f"t={t:.2f}s, u={u:.2f} m/s, delta={delta:.2f} deg")
+                # progressTracker.update(p[0], p[1])
+                waypointIndices = progressTracker.get_reference_window(lookahead=progressTracker.lookahead)
+                z_ref_xy = waypointSequence[:, waypointIndices].T
+                u_ref = np.zeros((len(waypointIndices), 2))
+                for i in range(len(waypointIndices)-1):
+                    uref, deltaref = qcarController.update_using_wp(
+                        p,
+                        waypointSequence[:, waypointIndices[i]],
+                        waypointSequence[:, waypointIndices[i+1]],
+                        th,
+                        v_meas,
+                        v_ref,
+                        dt
+                    )
+                    u_ref[i, :] = deltaref, uref
+                # u_ref, delta_ref = qcarController.update_using_wp(
+                #     p,
+                #     waypointSequence[:, waypointIndices[0]],    
+                #     waypointSequence[:, waypointIndices[-1]],
+                #     th,
+                #     v_meas,
+                #     v_ref,
+                #     dt
+                # )
+                # u_ref = np.array([[delta_ref, u_ref]] * len(waypointIndices))
+                z_ref = build_reference(z_ref_xy, u_ref) #may need to include delta_ref and u_ref from qcarController
+                z_ref = z_ref[:driveController.N+1]
+                u_ref = u_ref[:driveController.N]
+                x_mpc = np.array([
+                    p[0],
+                    p[1],
+                    th,
+                    v_meas,
+                    delta_prev,
+                    v_prev
+                ])
+                z_ref[0] = x_mpc[0:4]
+                delta_cmd, v_cmd = driveController.compute_control(x_mpc, z_ref, u_ref, verbose=True)
+                # v_meas must be in m/s (see section 2)
+                # e_v = v_cmd - v_meas
+                # v_int += e_v * dt
+
+                # u = Kp_v * e_v + Ki_v * v_int
+                # u = float(np.clip(u, u_min, u_max))
+                u = v_cmd
+                qcar.write(u, delta_cmd)
+
+                delta_prev = delta_cmd
+                v_prev     = u
+                print(f"s={progressTracker.s_hat:.2f}, v_cmd={u:.2f}, delta={delta_cmd:.3f} rad")
+
             # with det_lock:
             #     if detected_objects:
             #         names, boxes, dists = detected_objects

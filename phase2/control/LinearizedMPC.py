@@ -1,15 +1,23 @@
 import cvxpy as cp
 import numpy as np
 
-from control.KinematicBicycleModel import KinematicBicycleModel
 
 class LinearizedMPC:
     """
-    Solves ONE convex QP given linearized dynamics.
+    Linearized MPC with VELOCITY input.
+
+    State:
+        x = [px, py, psi, v, delta_prev, v_prev]   (nx=6)
+    Input:
+        u = [delta, v]                          (nu=2)
+
+    Model provides:
+        A, B, c = model.linearize(x_nom, u_nom)
+    where:
+        x_{k+1} = A_k x_k + B_k u_k + c_k
     """
 
-    def __init__(self, model: KinematicBicycleModel, N: int,
-                 bounds: dict, weights: dict):
+    def __init__(self, model, N: int, bounds: dict, weights: dict):
         self.model = model
         self.N = N
         self.bounds = bounds
@@ -18,11 +26,15 @@ class LinearizedMPC:
         self.nx = 6
         self.nu = 2
 
-    def solve(self, x0, zref, X_nom, U_nom, verbose=False):
+    def solve(self, x0, zref, uref, X_nom, U_nom, verbose=False):
+        """
+        Solve the linearized MPC QP.
+        """
         N = self.N
         Ts = self.model.Ts
-
-        # Linearize along nominal
+        
+        x0 = np.asarray(x0).reshape(-1)
+        # ---------- Linearize along nominal ----------
         A_list, B_list, c_list = [], [], []
         for k in range(N):
             A, B, c = self.model.linearize(X_nom[k], U_nom[k])
@@ -30,43 +42,52 @@ class LinearizedMPC:
             B_list.append(B)
             c_list.append(c)
 
-        # Decision variables
+        # ---------- Decision variables ----------
         X = cp.Variable((N + 1, self.nx))
         U = cp.Variable((N, self.nu))
 
-        # Weights
-        Q = np.diag(self.weights["Q"])
-        R = np.diag(self.weights["R"])
-        Rr = np.diag(self.weights["Rrate"])
+        # ---------- Weights ----------
+        # tracking is for [px, py, psi, v]  -> v comes from X[:,4] (v_prev state at each step)
+        Q = np.diag(self.weights["Q"])       # len=4
+        R = np.diag(self.weights["R"])       # len=2
+        Rr = np.diag(self.weights["Rrate"])  # len=2
 
-        # Constraints
-        cons = [X[0] == x0]
-
+        # ---------- Bounds ----------
         dmin, dmax = self.bounds["delta"]
-        amin, amax = self.bounds["a"]
-        drmin, drmax = self.bounds["delta_rate"]
-        armin, armax = self.bounds["a_rate"]
         vmin, vmax = self.bounds["v"]
+        drmin, drmax = self.bounds["delta_rate"]
+        vrmin, vrmax = self.bounds["v_rate"]
+
+        # ---------- Constraints ----------
+        cons = [X[0, :] == x0]
 
         for k in range(N):
-            cons += [X[k+1] == A_list[k] @ X[k] + B_list[k] @ U[k] + c_list[k]]
+            # dynamics
+            cons += [X[k + 1, :] == A_list[k] @ X[k, :] + B_list[k] @ U[k, :] + c_list[k]]
 
-            cons += [dmin <= U[k,0], U[k,0] <= dmax]
-            cons += [amin <= U[k,1], U[k,1] <= amax]
+            # input bounds
+            cons += [U[k, 0] >= dmin, U[k, 0] <= dmax]
+            cons += [U[k, 1] >= vmin, U[k, 1] <= vmax]
 
-            # cons += [vmin <= X[k,3], X[k,3] <= vmax]
+            # cons += [(U[k, 0] - X[k, 4]) / Ts >= drmin,
+            #          (U[k, 0] - X[k, 4]) / Ts <= drmax]
 
-            cons += [(U[k,0] - X[k,4]) / Ts >= drmin,
-                     (U[k,0] - X[k,4]) / Ts <= drmax]
+            # cons += [(U[k, 1] - X[k, 5]) / Ts >= vrmin,
+            #          (U[k, 1] - X[k, 5]) / Ts <= vrmax]
 
-            cons += [(U[k,1] - X[k,5]) / Ts >= armin,
-                     (U[k,1] - X[k,5]) / Ts <= armax]
+            # keep the stored v_prev within bounds too (helps feasibility)
+            cons += [X[k, 3] >= vmin, X[k, 3] <= vmax]
 
-        # Objective
+        cons += [X[N, 3] >= vmin, X[N, 3] <= vmax]
+
+        # ---------- Objective ----------
         cost = 0
         for k in range(N):
-            cost += cp.quad_form(X[k,0:4] - zref[k], Q)
-            cost += cp.quad_form(U[k], R)
+            # build tracking vector [px,py,psi,v]
+            zk = cp.hstack([X[k, 0], X[k, 1], X[k, 2], X[k, 3]])
+            # cost += cp.quad_form(zk - zref[k, :], Q)
+
+            cost += cp.quad_form(U[k,:] - uref[k,:], R)
 
             rate = cp.hstack([
                 (U[k,0] - X[k,4]) / Ts,
@@ -74,8 +95,10 @@ class LinearizedMPC:
             ])
             cost += cp.quad_form(rate, Rr)
 
-        cost += cp.quad_form(X[N,0:4] - zref[N], Q)
+        zN = cp.hstack([X[N, 0], X[N, 1], X[N, 2], X[N, 3]])
+        cost += cp.quad_form(zN - zref[N, :], Q)
 
+        # ---------- Solve ----------
         prob = cp.Problem(cp.Minimize(cost), cons)
         prob.solve(solver=cp.OSQP, warm_start=True, verbose=verbose)
 
