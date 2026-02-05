@@ -9,6 +9,7 @@ Skills activity code for environment interpretation lab guide.
 Please review the accompanying "Lab Guide - Environment Interpretation" PDF
 """
 
+import cv2
 import numpy as np
 from scipy.special import logit, expit
 from scipy import ndimage
@@ -22,6 +23,8 @@ from pal.utilities.scope import MultiScope
 from pal.utilities.math import find_overlap, wrap_to_2pi, wrap_to_pi
 from hal.content.qcar_functions import QCarEKF, QCarDriveController
 from hal.products.mats import SDCSRoadMap
+import pal.resources.images as images
+
 #endregion
 
 # ================ Experiment Configuration ================
@@ -39,6 +42,7 @@ controllerUpdateRate = 100
 # - v_ref: desired velocity in m/s
 # - nodeSequence: list of nodes from roadmap. Used for trajectory generation.
 enableVehicleControl = True
+enableSteeringControl = True
 v_ref = 0.3
 # nodeSequence = [0, 20, 0]
 nodeSequence = [9, 14, 9]
@@ -84,6 +88,7 @@ signal.signal(signal.SIGINT, sig_handler)
 gps = QCarGPS(initialPose=initialPose,calibrate=calibrate)
 while (not KILL_THREAD) and (gps.readGPS() or  gps.readLidar()):
     pass
+
 #endregion
 
 def controlLoop():
@@ -96,30 +101,7 @@ def controlLoop():
     count = 0
     #endregion
 
-    #region Set up plot items
-    arrow1 = pg.ArrowItem(
-        angle=180,
-        tipAngle=60,
-        headLen=10,
-        tailLen=10,
-        tailWidth=5,
-        pen={'color': 'w', 'width': 1},
-        brush='r'
-    )
-    arrow1.setPos(0,0)
-    scope.axes[1].plot.addItem(arrow1)
-
-    arrow2 = pg.ArrowItem(
-        angle=180,
-        tipAngle=60,
-        headLen=10,
-        tailLen=10,
-        tailWidth=5,
-        pen={'color': 'w', 'width': 1},
-        brush='r'
-    )
-    scope.axes[2].plot.addItem(arrow2)
-    #endregion
+    
 
     #region QCar interface setup
     with lock:
@@ -182,10 +164,34 @@ def controlLoop():
             #region : Update Scopes
             count += 1
             if count >= countMax and t > startDelay:
-                scope.axes[2].sample(t, [[p[0], p[1]]])
-                arrow1.setStyle(angle=180-th*180/np.pi)
-                arrow2.setPos(p[0],p[1])
-                arrow2.setStyle(angle=180-th*180/np.pi)
+                t_plot = t - startDelay
+                # Speed control scope
+                speedScope.axes[0].sample(t_plot, [v, v_ref])
+                speedScope.axes[1].sample(t_plot, [v_ref-v])
+                speedScope.axes[2].sample(t_plot, [u])
+
+                # Steering control scope
+                if enableSteeringControl:
+                    steeringScope.axes[4].sample(t_plot, [[p[0],p[1]]])
+
+                    p[0] = ekf.x_hat[0,0]
+                    p[1] = ekf.x_hat[1,0]
+
+                    # x_ref = steeringController.p_ref[0]
+                    # y_ref = steeringController.p_ref[1]
+                    # th_ref = steeringController.th_ref
+
+                    x_ref = gps.position[0]
+                    y_ref = gps.position[1]
+                    th_ref = gps.orientation[2]
+
+                    steeringScope.axes[0].sample(t_plot, [p[0], x_ref])
+                    steeringScope.axes[1].sample(t_plot, [p[1], y_ref])
+                    steeringScope.axes[2].sample(t_plot, [th, th_ref])
+                    steeringScope.axes[3].sample(t_plot, [delta])
+
+                    arrow.setPos(p[0], p[1])
+                    arrow.setStyle(angle=180-th*180/np.pi)
 
                 count = 0
             #endregion
@@ -196,61 +202,141 @@ def controlLoop():
         with lock:
             print('Control thread terminated')
 
-
-
 #region : Setup and run experiment
 if __name__ == '__main__':
-    print("initial position", x_hat)
-    #region : Setup Scopes
+    
+#region : Setup scopes
     if IS_PHYSICAL_QCAR:
         fps = 10
     else:
         fps = 30
-
-    scope = MultiScope(
-        rows=2,
-        cols=2,
-        title='Environment Interpretation',
+    # Scope for monitoring speed controller
+    speedScope = MultiScope(
+        rows=3,
+        cols=1,
+        title='Vehicle Speed Control',
         fps=fps
     )
-
-    # Polar Patch
-    scope.addXYAxis(
+    speedScope.addAxis(
         row=0,
         col=0,
-        xLabel='Angle [deg]',
-        yLabel='Range [m]'
+        timeWindow=tf,
+        yLabel='Vehicle Speed [m/s]',
+        yLim=(0, 1)
     )
-    scope.axes[0].attachImage()
+    speedScope.axes[0].attachSignal(name='v_meas', width=2)
+    speedScope.axes[0].attachSignal(name='v_ref')
 
-    # Patch
-    scope.addXYAxis(
+    speedScope.addAxis(
         row=1,
         col=0,
-        xLabel='x Position [m]',
-        yLabel='y Position [m]'
+        timeWindow=tf,
+        yLabel='Speed Error [m/s]',
+        yLim=(-0.5, 0.5)
     )
-    scope.axes[1].attachImage()
+    speedScope.axes[1].attachSignal()
 
-    # Generated Map and followed trajectory
-    scope.addXYAxis(
-        row=0,
-        col=1,
-        rowSpan=2,
-        xLabel='x Position [m]',
-        yLabel='y Position [m]',
-        xLim=(-4, 3),
-        yLim=(-2, 6)
+    speedScope.addAxis(
+        row=2,
+        col=0,
+        timeWindow=tf,
+        xLabel='Time [s]',
+        yLabel='Throttle Command [%]',
+        yLim=(-0.3, 0.3)
     )
-    scope.axes[2].attachSignal(name='Measured', width=2, style='--.')
-    scope.axes[2].attachImage()
+    speedScope.axes[2].attachSignal()
+
+    # Scope for monitoring steering controller
+    steeringScope = MultiScope(
+            rows=4,
+            cols=2,
+            title='Vehicle Steering Control',
+            fps=fps
+        )
+
+    steeringScope.addAxis(
+            row=0,
+            col=0,
+            timeWindow=tf,
+            yLabel='x Position [m]',
+            yLim=(-2.5, 2.5)
+        )
+    steeringScope.axes[0].attachSignal(name='x_meas')
+    steeringScope.axes[0].attachSignal(name='x_ref')
+
+    steeringScope.addAxis(
+            row=1,
+            col=0,
+            timeWindow=tf,
+            yLabel='y Position [m]',
+            yLim=(-1, 5)
+        )
+    steeringScope.axes[1].attachSignal(name='y_meas')
+    steeringScope.axes[1].attachSignal(name='y_ref')
+
+    steeringScope.addAxis(
+            row=2,
+            col=0,
+            timeWindow=tf,
+            yLabel='Heading Angle [rad]',
+            yLim=(-3.5, 3.5)
+        )
+    steeringScope.axes[2].attachSignal(name='th_meas')
+    steeringScope.axes[2].attachSignal(name='th_ref')
+
+    steeringScope.addAxis(
+            row=3,
+            col=0,
+            timeWindow=tf,
+            yLabel='Steering Angle [rad]',
+            yLim=(-0.6, 0.6)
+        )
+    steeringScope.axes[3].attachSignal()
+    steeringScope.axes[3].xLabel = 'Time [s]'
+
+    steeringScope.addXYAxis(
+            row=0,
+            col=1,
+            rowSpan=4,
+            xLabel='x Position [m]',
+            yLabel='y Position [m]',
+            xLim=(-2.5, 2.5),
+            yLim=(-1, 5)
+        )
+
+    im = cv2.imread(
+            images.SDCS_CITYSCAPE,
+            cv2.IMREAD_GRAYSCALE
+        )
+
+    steeringScope.axes[4].attachImage(
+            scale=(-0.002035, 0.002035),
+            offset=(1125,2365),
+            rotation=180,
+            levels=(0, 255)
+        )
+    steeringScope.axes[4].images[0].setImage(image=im)
 
     referencePath = pg.PlotDataItem(
-        pen={'color': (85,168,104), 'width': 2},
-        name='Reference'
-    )
-    referencePath.setData(waypointSequence[0, :], waypointSequence[1, :])
-    scope.axes[2].plot.addItem(referencePath)
+            pen={'color': (85,168,104), 'width': 2},
+            name='Reference'
+        )
+    steeringScope.axes[4].plot.addItem(referencePath)
+    referencePath.setData(waypointSequence[0, :],waypointSequence[1, :])
+
+    steeringScope.axes[4].attachSignal(name='Estimated', width=2)
+
+    arrow = pg.ArrowItem(
+            angle=180,
+            tipAngle=60,
+            headLen=10,
+            tailLen=10,
+            tailWidth=5,
+            pen={'color': 'w', 'fillColor': [196,78,82], 'width': 1},
+            brush=[196,78,82]
+        )
+    arrow.setPos(initialPose[0], initialPose[1])
+    steeringScope.axes[4].plot.addItem(arrow)
     #endregion
 
     #region : Setup threads, then run experiment
@@ -273,3 +359,4 @@ if __name__ == '__main__':
 
     input('Experiment complete. Press any key to exit...')
 #endregion
+

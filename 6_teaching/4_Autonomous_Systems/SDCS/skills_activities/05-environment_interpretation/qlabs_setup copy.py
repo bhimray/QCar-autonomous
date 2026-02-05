@@ -14,7 +14,7 @@ from pal.products.qcar import QCAR_CONFIG
 def setup(
         initialPosition=[0, 0, 0.000],
         initialOrientation=[0, 0, 0],
-        rtModel=rtmodels.QCAR2
+        rtModel=rtmodels.QCAR
     ):
 
     # Try to connect to Qlabs

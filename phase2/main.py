@@ -86,7 +86,7 @@ x_hat = initialPose
 t_hat = 0
 
 if not IS_PHYSICAL_QCAR:
-    import main_setup as qlabs_setup
+    import qlabs_setup
     from qvl.qcar import QLabsQCar
     hQCar = qlabs_setup.setup(
         initialPosition=[initialPose[0], initialPose[1], 0],
