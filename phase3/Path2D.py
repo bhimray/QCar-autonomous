@@ -69,6 +69,9 @@ class Path2D:
         np.savetxt("path2d_psi.csv", self.psi, delimiter=",", header="psi", comments="")
         np.savetxt("path2d_kappa.csv", self.kappa, delimiter=",", header="kappa", comments="")
 
+        # Optional speed profile (computed offline on demand)
+        self.v_ref = None
+
 
     def _closest_segment(self, p, i_center=None, window=50):
         # search only near the last best segment
@@ -129,4 +132,44 @@ class Path2D:
     def kappa_at_s(self, s_query):
         # linear interpolation in s
         return float(np.interp(s_query, self.s, self.kappa))
+
+    def v_ref_at_s(self, s_query):
+        if self.v_ref is None:
+            raise ValueError("v_ref has not been computed. Call compute_speed_profile() first.")
+        return float(np.interp(s_query, self.s, self.v_ref))
+
+    def compute_speed_profile(
+        self,
+        a_lat_max,
+        v_min,
+        v_max,
+        a_accel,
+        a_decel,
+        kappa_min=1e-3
+    ):
+        """
+        Build offline speed profile from curvature with two-pass acceleration constraints.
+        Stores result in self.v_ref.
+        """
+        if a_lat_max <= 0:
+            raise ValueError("a_lat_max must be positive.")
+        if v_max <= 0:
+            raise ValueError("v_max must be positive.")
+
+        kappa_abs = np.maximum(np.abs(self.kappa), kappa_min)
+        v_curve = np.sqrt(a_lat_max / kappa_abs)
+        v = np.clip(v_curve, v_min, v_max)
+
+        # Two-pass accel constraints
+        ds = np.diff(self.s)
+        for i in range(len(ds)):
+            v[i + 1] = min(v[i + 1], np.sqrt(v[i]**2 + 2.0 * a_accel * ds[i]))
+
+        for i in range(len(ds) - 1, -1, -1):
+            v[i] = min(v[i], np.sqrt(v[i + 1]**2 + 2.0 * a_decel * ds[i]))
+
+        v = np.clip(v, v_min, v_max)
+        self.v_ref = v
+        np.savetxt("path2d_vref.csv", self.v_ref, delimiter=",", header="v_ref", comments="")
+        return self.v_ref
 

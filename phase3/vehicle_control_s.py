@@ -30,7 +30,6 @@ from FrenetBicycleModel import FrenetBicycleModel
 from FrenetNonLinearMPCController import FrenetNonlinearMPCController
 from Path2D import Path2D
 
-
 #endregion
 
 # ================ Lightweight Steering PID (Minimal Past/Future Influence) ================
@@ -97,7 +96,7 @@ class MinimalInfluencePID:
 # - controllerUpdateRate: control update rate in Hz. Shouldn't exceed 500
 tf = 300
 startDelay = 1
-controllerUpdateRate = 60  # Hz
+controllerUpdateRate = 65  # Hz
 
 # ===== Vehicle Controller Parameters
 # - enableVehicleControl: If true, the QCar will drive through the specified
@@ -106,7 +105,7 @@ controllerUpdateRate = 60  # Hz
 # - nodeSequence: list of nodes from roadmap. Used for trajectory generation.
 enableVehicleControl = True
 enableSteeringControl = True
-v_ref = 1.5  # m/s
+v_ref = 0.5  # m/s
 # nodeSequence = [0, 20, 0]
 nodeSequence = [9, 14, 9]
 # ===== Occupancy Grid Parameters
@@ -167,11 +166,11 @@ bounds = {
 
 weights = {
     # [s, ey, epsi, v]
-    "Q":   [ 1e-6,  195.0,  195.0,  2.0 ],
+    "Q":   [ 1e-6,  185.0,  190.0,  2.0 ],
     # [delta, accel]
-    "R":   [ 6.3,   2.0 ],
+    "R":   [ 6.0,   2.0 ],
     # [ddelta, daccel]
-    "Sdu": [ 21.0,  4.0 ]
+    "Sdu": [ 25.0,  4.0 ]
 }
 
 # weights = {
@@ -186,6 +185,17 @@ weights = {
 Ts = 1.0 / controllerUpdateRate
 countMax = controllerUpdateRate / 5
 path = Path2D(waypointSequence.T, Ts)  # waypointSequence is (2,N), convert to (N,2)
+
+# Offline speed profile from curvature
+a_lat_max = 1.5  # max lateral acceleration [m/s^2]
+a_accel = 1.5    # max forward accel [m/s^2]
+path.compute_speed_profile(
+    a_lat_max=a_lat_max,
+    v_min=0.0,
+    v_max=v_ref,
+    a_accel=a_accel,
+    a_decel=a_accel,
+)
 
 def controlLoop():
     #region controlLoop setup
@@ -208,10 +218,10 @@ def controlLoop():
         ekf = QCarEKF(x_0=x_hat)
     driveController = QCarDriveController(waypointSequence, cyclic=False)
     pid_controller = PID(
-                    Kp=0.1,
-                    Ki=1,
-                    Kd=0,
-                    uLimits=(-v_ref, v_ref)
+                    Kp= 0.2,
+                    Ki= 1,
+                    Kd= 0,
+                    uLimits= (-v_ref, v_ref)
                 )
     # delta_pid = MinimalInfluencePID(
     #     Kp=0.9,
@@ -232,8 +242,8 @@ def controlLoop():
         ey_max=ey_max,
         delta_max=np.pi/6,
         ddelta_max=2.0,
-        a_min=-1.5,
-        a_max=1.5,
+        a_min=-a_accel,
+        a_max=a_accel,
         v_min=0.0,
         v_max=v_ref,
         w_ey=weights["Q"][1],
@@ -245,7 +255,7 @@ def controlLoop():
         w_da=weights["Sdu"][1],
         use_curv_speed_ref=True,
         v_ref_base=v_ref,
-        kappa_speed_gain= 60.0
+        kappa_speed_gain= 60.0,
     )
     #endregion
 

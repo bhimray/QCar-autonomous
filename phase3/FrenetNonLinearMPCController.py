@@ -32,11 +32,16 @@ class FrenetNonlinearMPCController:
 
         # curvature horizon using current s
         # (simple rollout: s_k ≈ s + k*Ts*v, good enough to query kappa)
-        s_seq = np.array([s + k*Ts*max(v_meas, 0.0) for k in range(self.N)], dtype=float)
+        s_seq_full = np.array([s + k*Ts*max(v_meas, 0.0) for k in range(self.N + 1)], dtype=float)
+        s_seq = s_seq_full[:-1]
         kappa_seq = np.array([self.path.kappa_at_s(sk) for sk in s_seq], dtype=float)
         kappa_ref = float(kappa_seq[0])
 
-        X_opt, U_opt = self.nmpc.solve(x0, kappa_seq, delta_prev=self.delta_prev)
+        vref_seq = None
+        if getattr(self.path, "v_ref", None) is not None:
+            vref_seq = np.array([self.path.v_ref_at_s(sk) for sk in s_seq_full], dtype=float)
+
+        X_opt, U_opt = self.nmpc.solve(x0, kappa_seq, delta_prev=self.delta_prev, vref_seq_np=vref_seq)
 
         delta_cmd = float(U_opt[0, 0])
         a_cmd = float(U_opt[0, 1])

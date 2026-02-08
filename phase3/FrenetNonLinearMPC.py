@@ -27,7 +27,7 @@ class FrenetNonlinearMPC:
         # optional curvature speed shaping:
         use_curv_speed_ref=True,
         v_ref_base=0.8,
-        kappa_speed_gain=2.0
+        kappa_speed_gain=2.0,
     ):
         self.path = path
         self.Ts = Ts
@@ -100,11 +100,7 @@ class FrenetNonlinearMPC:
         g = []
         lbg = []
         ubg = []
-
-        # initial state constraint
-        g.append(X[:, 0] - x0)
-        lbg += [0, 0, 0, 0]
-        ubg += [0, 0, 0, 0]
+        self.delta_bound_g_idx = []
 
         # running cost
         J = 0
@@ -115,10 +111,7 @@ class FrenetNonlinearMPC:
             kappa_k = kappa_seq[k]
             xk = X[:, k]
             uk = U[:, k]
-            xnext = X[:, k+1]
-            xnext_pred = xk + Ts * f(xk, uk, kappa_k)
 
-            g.append(xnext - xnext_pred)
             lbg += [0, 0, 0, 0]
             ubg += [0, 0, 0, 0]
 
@@ -228,7 +221,21 @@ class FrenetNonlinearMPC:
         vref = np.clip(vref, self.v_min, self.v_max)
         return vref
 
-    def solve(self, x0_np, kappa_seq_np, delta_prev=0.0):
+    def _delta_max_from_kappa(self, kappa_seq):
+        """
+        Schedule steering bounds vs curvature.
+        |kappa| = 0 -> delta_max_straight
+        |kappa| >= kappa_delta_transition -> delta_max
+        """
+        kappa_abs = np.abs(np.asarray(kappa_seq, dtype=float))
+        if self.kappa_delta_transition <= 1e-6:
+            alpha = np.ones_like(kappa_abs)
+        else:
+            alpha = np.clip(kappa_abs / self.kappa_delta_transition, 0.0, 1.0)
+        dmax = self.delta_max_straight + (self.delta_max - self.delta_max_straight) * alpha
+        return np.clip(dmax, 0.0, self.delta_max)
+
+    def solve(self, x0_np, kappa_seq_np, delta_prev=0.0, vref_seq_np=None):
         """
         x0_np: [s, ey, epsi, v]
         kappa_seq_np: length N
@@ -240,7 +247,13 @@ class FrenetNonlinearMPC:
         kappa_seq_np = np.asarray(kappa_seq_np, dtype=float).reshape(-1)
         assert len(kappa_seq_np) == self.N
 
-        vref = self._build_vref(x0_np[0], kappa_seq_np)
+        if vref_seq_np is None:
+            vref = self._build_vref(x0_np[0], kappa_seq_np)
+        else:
+            vref = np.asarray(vref_seq_np, dtype=float).reshape(-1)
+            if len(vref) != self.N + 1:
+                raise ValueError("vref_seq_np must have length N+1.")
+            vref = np.clip(vref, self.v_min, self.v_max)
         
         # build initial guess
         if self.last_sol is None:
@@ -257,10 +270,22 @@ class FrenetNonlinearMPC:
         # parameters
         # print("v_ref;", vref[0])
         p = np.concatenate([x0_np, kappa_seq_np, vref])
+        lbg = self.lbg
+        ubg = self.ubg
+        if self.use_kappa_delta_bounds:
+            if self.delta_bound_g_idx is None or len(self.delta_bound_g_idx) != self.N:
+                raise RuntimeError("delta_bound_g_idx not initialized correctly.")
+            dmax_seq = self._delta_max_from_kappa(kappa_seq_np)
+            lbg = self.lbg.copy()
+            ubg = self.ubg.copy()
+            for idx, dmax in zip(self.delta_bound_g_idx, dmax_seq):
+                lbg[idx] = -dmax
+                ubg[idx] = +dmax
+
         sol = self.solver(
             x0=z0,
             lbx=self.lbz, ubx=self.ubz,
-            lbg=self.lbg, ubg=self.ubg,
+            lbg=lbg, ubg=ubg,
             p=p
         )
 
