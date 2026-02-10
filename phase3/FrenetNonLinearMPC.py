@@ -270,22 +270,10 @@ class FrenetNonlinearMPC:
         # parameters
         # print("v_ref;", vref[0])
         p = np.concatenate([x0_np, kappa_seq_np, vref])
-        lbg = self.lbg
-        ubg = self.ubg
-        if self.use_kappa_delta_bounds:
-            if self.delta_bound_g_idx is None or len(self.delta_bound_g_idx) != self.N:
-                raise RuntimeError("delta_bound_g_idx not initialized correctly.")
-            dmax_seq = self._delta_max_from_kappa(kappa_seq_np)
-            lbg = self.lbg.copy()
-            ubg = self.ubg.copy()
-            for idx, dmax in zip(self.delta_bound_g_idx, dmax_seq):
-                lbg[idx] = -dmax
-                ubg[idx] = +dmax
-
         sol = self.solver(
             x0=z0,
             lbx=self.lbz, ubx=self.ubz,
-            lbg=lbg, ubg=ubg,
+            lbg=self.lbg, ubg=self.ubg,
             p=p
         )
 
