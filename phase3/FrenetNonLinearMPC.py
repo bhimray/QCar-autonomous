@@ -24,6 +24,8 @@ class FrenetNonlinearMPC:
         w_ey=50.0, w_epsi=20.0, w_v=5.0,
         w_delta=1.0, w_a=0.5,
         w_ddelta=10.0, w_da=1.0,
+        w_ey_slack=1e4,
+        w_ey_slack_lin=100.0,
         # optional curvature speed shaping:
         use_curv_speed_ref=True,
         v_ref_base=0.8,
@@ -49,6 +51,8 @@ class FrenetNonlinearMPC:
         self.w_a = w_a
         self.w_ddelta = w_ddelta
         self.w_da = w_da
+        self.w_ey_slack = float(w_ey_slack)
+        self.w_ey_slack_lin = float(w_ey_slack_lin)
 
         self.use_curv_speed_ref = use_curv_speed_ref
         self.v_ref_base = float(v_ref_base)
@@ -60,12 +64,6 @@ class FrenetNonlinearMPC:
         # warm start memory
         self.last_sol = None
 
-    def _kappa_sym(self, s_sym):
-        """
-        CasADi needs a symbolic expression; we will pass kappa sequence as a parameter vector.
-        So this is unused in the NLP itself.
-        """
-        raise NotImplementedError
 
     def _build_solver(self):
         N = self.N
@@ -75,11 +73,12 @@ class FrenetNonlinearMPC:
         # Decision variables
         X = ca.SX.sym("X", 4, N+1)     # states [s, ey, epsi, v]
         U = ca.SX.sym("U", 2, N)       # inputs [delta, a]
+        S_ey = ca.SX.sym("S_ey", N+1)  # slack for |ey| <= ey_max + S_ey
 
         # Parameters
         x0 = ca.SX.sym("x0", 4)              # initial state
         kappa_seq = ca.SX.sym("kappa", N)    # curvature along horizon (precomputed)
-        v_ref_param = ca.SX.sym("vref", N+1) # speed reference along horizon (optional)
+        v_ref_param = ca.SX.sym("vref", N+1) # speed reference along horizon (precomputed)
 
         # dynamics function
         def f(x, u, kappa):
@@ -96,21 +95,35 @@ class FrenetNonlinearMPC:
             vdot = a
             return ca.vertcat(sdot, eydot, epsidot, vdot)
 
+        def rk4_step(x, u, kappa):
+            k1 = f(x, u, kappa)
+            k2 = f(x + 0.5 * Ts * k1, u, kappa)
+            k3 = f(x + 0.5 * Ts * k2, u, kappa)
+            k4 = f(x + Ts * k3, u, kappa)
+            return x + (Ts / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
         # constraints list
         g = []
         lbg = []
         ubg = []
-        self.delta_bound_g_idx = []
 
         # running cost
         J = 0
 
-        # Input bounds and state bounds enforced via variable bounds (later)
+        # initial state hard constraint
+        g.append(X[:,0] - x0)
+        lbg += [0, 0, 0, 0]
+        ubg += [0, 0, 0, 0]
+
         # Add dynamics constraints
         for k in range(N):
             kappa_k = kappa_seq[k]
             xk = X[:, k]
             uk = U[:, k]
+            xnext = X[:, k+1]
+            xnext_pred = rk4_step(xk, uk, kappa_k)
+
+            g.append(xnext - xnext_pred)
 
             lbg += [0, 0, 0, 0]
             ubg += [0, 0, 0, 0]
@@ -124,6 +137,15 @@ class FrenetNonlinearMPC:
 
             J += self.w_ey * (ey_k**2) + self.w_epsi * (epsi_k**2) + self.w_v * ((v_k - v_ref_k)**2)
             J += self.w_delta * (uk[0]**2) + self.w_a * (uk[1]**2)
+            J += self.w_ey_slack * (S_ey[k]**2) + self.w_ey_slack_lin * S_ey[k]
+
+            # soft lateral bounds: |ey| <= ey_max + S_ey[k]
+            g.append(ey_k - S_ey[k])
+            lbg.append(-self.ey_max)
+            ubg.append(self.ey_max)
+            g.append(-ey_k - S_ey[k])
+            lbg.append(-self.ey_max)
+            ubg.append(self.ey_max)
 
             # smoothness penalties (rate)
             if k > 0:
@@ -141,10 +163,18 @@ class FrenetNonlinearMPC:
         epsiN = X[2, N]
         vN = X[3, N]
         v_ref_N = v_ref_param[N]
-        J += 5.0*self.w_ey*(eyN**2) + 5.0*self.w_epsi*(epsiN**2) + 2.0*self.w_v*((vN - v_ref_N)**2)
+        J += self.w_ey*(eyN**2) + self.w_epsi*(epsiN**2) + self.w_v*((vN - v_ref_N)**2)
+        J += self.w_ey_slack * (S_ey[N]**2) + self.w_ey_slack_lin * S_ey[N]
+
+        g.append(eyN - S_ey[N])
+        lbg.append(-np.inf)
+        ubg.append(self.ey_max)
+        g.append(-eyN - S_ey[N])
+        lbg.append(-np.inf)
+        ubg.append(self.ey_max)
 
         # pack variables
-        z = ca.vertcat(ca.reshape(X, -1, 1), ca.reshape(U, -1, 1))
+        z = ca.vertcat(ca.reshape(X, -1, 1), ca.reshape(U, -1, 1), ca.reshape(S_ey, -1, 1))
         p = ca.vertcat(x0, kappa_seq, v_ref_param)
 
         nlp = {"x": z, "f": J, "g": ca.vertcat(*g), "p": p}
@@ -152,7 +182,7 @@ class FrenetNonlinearMPC:
         opts = {
             "ipopt.print_level": 0,
             "print_time": 0,
-            "ipopt.max_iter": 200,
+            "ipopt.max_iter": 20,
             "ipopt.tol": 1e-4,
             "ipopt.acceptable_tol": 1e-3,
             "ipopt.linear_solver": "mumps",  # default; keep
@@ -165,7 +195,8 @@ class FrenetNonlinearMPC:
         self.nu = 2
         self.nX = self.nx*(self.N+1)
         self.nU = self.nu*self.N
-        self.nz = self.nX + self.nU
+        self.nS = self.N + 1
+        self.nz = self.nX + self.nU + self.nS
 
         # variable bounds
         lbz = -np.inf*np.ones(self.nz)
@@ -177,15 +208,9 @@ class FrenetNonlinearMPC:
             return k*self.nx + i
 
         for k in range(self.N+1):
-            # ey bounds
-            lbz[idx_x(k, 1)] = -self.ey_max
-            ubz[idx_x(k, 1)] = +self.ey_max
             # v bounds
             lbz[idx_x(k, 3)] = self.v_min
             ubz[idx_x(k, 3)] = self.v_max
-            # epsi can be left unbounded (wrap happens outside), or bound mildly:
-            # lbz[idx_x(k, 2)] = -self.delta_max
-            # ubz[idx_x(k, 2)] = +self.delta_max
 
         # U bounds
         offsetU = self.nX
@@ -199,6 +224,15 @@ class FrenetNonlinearMPC:
             # accel bounds
             lbz[idx_u(k, 1)] = self.a_min
             ubz[idx_u(k, 1)] = self.a_max
+
+        # slack bounds
+        offsetS = self.nX + self.nU
+        def idx_s(k):
+            return offsetS + k
+
+        for k in range(self.N+1):
+            lbz[idx_s(k)] = 0.0
+            ubz[idx_s(k)] = +np.inf
 
         self.lbz = lbz
         self.ubz = ubz
@@ -221,19 +255,6 @@ class FrenetNonlinearMPC:
         vref = np.clip(vref, self.v_min, self.v_max)
         return vref
 
-    def _delta_max_from_kappa(self, kappa_seq):
-        """
-        Schedule steering bounds vs curvature.
-        |kappa| = 0 -> delta_max_straight
-        |kappa| >= kappa_delta_transition -> delta_max
-        """
-        kappa_abs = np.abs(np.asarray(kappa_seq, dtype=float))
-        if self.kappa_delta_transition <= 1e-6:
-            alpha = np.ones_like(kappa_abs)
-        else:
-            alpha = np.clip(kappa_abs / self.kappa_delta_transition, 0.0, 1.0)
-        dmax = self.delta_max_straight + (self.delta_max - self.delta_max_straight) * alpha
-        return np.clip(dmax, 0.0, self.delta_max)
 
     def solve(self, x0_np, kappa_seq_np, delta_prev=0.0, vref_seq_np=None):
         """
@@ -242,7 +263,7 @@ class FrenetNonlinearMPC:
         returns: (X_opt, U_opt)
         """
         x0_np = np.asarray(x0_np, dtype=float).copy()
-        x0_np[2] = wrap_to_pi(x0_np[2]) #compare this value
+        x0_np[2] = wrap_to_pi(x0_np[2])
 
         kappa_seq_np = np.asarray(kappa_seq_np, dtype=float).reshape(-1)
         assert len(kappa_seq_np) == self.N
@@ -262,7 +283,12 @@ class FrenetNonlinearMPC:
             U_guess = np.zeros((2, self.N))
             U_guess[0, :] = np.clip(delta_prev, -self.delta_max, self.delta_max)
             U_guess[1, :] = 0.0
-            z0 = np.concatenate([X_guess.reshape(-1, order="F"), U_guess.reshape(-1, order="F")])
+            S_guess = np.zeros(self.nS)
+            z0 = np.concatenate([
+                X_guess.reshape(-1, order="F"),
+                U_guess.reshape(-1, order="F"),
+                S_guess,
+            ])
         else:
             # warm start from last solution
             z0 = self.last_sol
@@ -282,10 +308,12 @@ class FrenetNonlinearMPC:
 
         # unpack
         X_flat = z[:self.nX]
-        U_flat = z[self.nX:]
+        U_flat = z[self.nX:self.nX + self.nU]
+        S_flat = z[self.nX + self.nU:]
 
         X_opt = X_flat.reshape((self.nx, self.N+1), order="F").T
         U_opt = U_flat.reshape((self.nu, self.N), order="F").T
+        self.last_slack = S_flat.copy()
         # U_opt[:,0]=delta, U_opt[:,1]=a
 
         return X_opt, U_opt

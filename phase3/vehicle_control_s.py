@@ -96,7 +96,7 @@ class MinimalInfluencePID:
 # - controllerUpdateRate: control update rate in Hz. Shouldn't exceed 500
 tf = 300
 startDelay = 1
-controllerUpdateRate = 65  # Hz
+controllerUpdateRate = 60  # Hz
 
 # ===== Vehicle Controller Parameters
 # - enableVehicleControl: If true, the QCar will drive through the specified
@@ -163,24 +163,29 @@ bounds = {
         "v_cmd": (0, v_ref),
         "ey": (ey_min, ey_max)
     }
+alpha = 300
+Q = alpha * np.array([0.001, 1, 1, 0.001])
+beta = 2
+R = beta * np.array([3, 1])
+gamma = 10
+Sdu = gamma * np.array([1, 0.2])
+# weights = {
+#     # [s, ey, epsi, v]
+#     "Q":  Q,
+#     # [delta, accel]
+#     "R":  R,
+#     # [ddelta, daccel]
+#     "Sdu": Sdu
+# }
 
 weights = {
     # [s, ey, epsi, v]
-    "Q":   [ 1e-6,  185.0,  190.0,  2.0 ],
+    "Q":   [ 1e-6,  185.0,  165.0,  10.0 ],
     # [delta, accel]
-    "R":   [ 6.0,   2.0 ],
+    "R":   [ 6,   10.0 ],
     # [ddelta, daccel]
-    "Sdu": [ 25.0,  4.0 ]
+    "Sdu": [ 20.0,  15.0 ]
 }
-
-# weights = {
-#     # [s, ey, epsi, v]
-#     "Q":   [ 1e-6,  195.0,  195.0,  2.0 ],
-#     # [delta, accel]
-#     "R":   [ 6.3,   2.0 ],
-#     # [ddelta, daccel]
-#     "Sdu": [ 21.0,  4.0 ]
-# }
 
 Ts = 1.0 / controllerUpdateRate
 countMax = controllerUpdateRate / 5
@@ -197,9 +202,11 @@ path.compute_speed_profile(
     a_decel=a_accel,
 )
 
+# DELTA_S_LOG = {"s": [], "delta": [], "delta_ref": []}
+
 def controlLoop():
     #region controlLoop setup
-    global KILL_THREAD, x_hat, t_hat
+    global KILL_THREAD, x_hat, t_hat, DELTA_S_LOG
     u = 0
     v_cmd = 0
     delta = 0
@@ -221,30 +228,22 @@ def controlLoop():
                     Kp= 0.2,
                     Ki= 1,
                     Kd= 0,
-                    uLimits= (-v_ref, v_ref)
+                    uLimits= (0, v_ref)
                 )
-    # delta_pid = MinimalInfluencePID(
-    #     Kp=0.9,
-    #     Ki=0.3,
-    #     Kd=0.01,
-    #     u_limits=bounds["delta"],
-    #     i_limit=0.6,
-    #     d_filter_alpha=0.7
-    # )
     qcar = QCar(readMode=1, frequency=controllerUpdateRate)
     # in controlLoop init
     f_controller = FrenetNonlinearMPCController(
         path=path,
         Ts=Ts,
         L=lf+lr,
-        N=50,
+        N=40,
         sqp_iters=2,
         ey_max=ey_max,
         delta_max=np.pi/6,
         ddelta_max=2.0,
         a_min=-a_accel,
         a_max=a_accel,
-        v_min=0.0,
+        v_min=0.001,
         v_max=v_ref,
         w_ey=weights["Q"][1],
         w_epsi=weights["Q"][2],
@@ -328,6 +327,12 @@ def controlLoop():
                 # delta = delta_pid.update(delta_cmd, delta_ref, dt)
                 delta = delta_cmd
                 u = pid_controller.update(v_cmd, v, dt)
+                # u = v_cmd
+
+                # s_now, _, _, _, _ = path.project_frenet(x, y, th, Ts, v_ref)
+                # DELTA_S_LOG["s"].append(float(s_now))
+                # DELTA_S_LOG["delta"].append(float(delta))
+                # DELTA_S_LOG["delta_ref"].append(float(delta_ref))
             # if u < -0.02:
             #     u = 0.0
 
@@ -568,48 +573,49 @@ if __name__ == '__main__':
     steeringScope.axes[4].plot.addItem(arrow)
     #endregion
 
-     # Scope for path curvature/heading vs s
-    pathScope = MultiScope(
-            rows=2,
-            cols=1,
-            title='Path Curvature/Heading vs s',
-            fps=fps
-        )
+    # #region
+    #  # Scope for path curvature/heading vs s
+    # pathScope = MultiScope(
+    #         rows=2,
+    #         cols=1,
+    #         title='Path Curvature/Heading vs s',
+    #         fps=fps
+    #     )
 
-    pathScope.addAxis(
-            row=0,
-            col=0,
-            timeWindow=path.s[-1],
-            yLabel='kappa [1/m]',
-            yLim=(-2.0, 2.0)
-        )
-    pathScope.axes[0].attachSignal(name='kappa')
+    # pathScope.addAxis(
+    #         row=0,
+    #         col=0,
+    #         timeWindow=path.s[-1],
+    #         yLabel='kappa [1/m]',
+    #         yLim=(-2.0, 2.0)
+    #     )
+    # pathScope.axes[0].attachSignal(name='kappa')
 
-    pathScope.addAxis(
-            row=1,
-            col=0,
-            timeWindow=path.s[-1],
-            yLabel='psi [rad]',
-            yLim=(-np.pi, np.pi)
-        )
-    pathScope.axes[1].attachSignal(name='psi')
-    pathScope.axes[1].xLabel = 's [m]'
+    # pathScope.addAxis(
+    #         row=1,
+    #         col=0,
+    #         timeWindow=path.s[-1],
+    #         yLabel='psi [rad]',
+    #         yLim=(-np.pi, np.pi)
+    #     )
+    # pathScope.axes[1].attachSignal(name='psi')
+    # pathScope.axes[1].xLabel = 's [m]'
 
-    # Static plots for kappa/psi vs s
-    kappaPlot = pg.PlotDataItem(
-            pen={'color': (196,78,82), 'width': 2},
-            name='kappa(s)'
-        )
-    pathScope.axes[0].plot.addItem(kappaPlot)
-    kappaPlot.setData(path.s, path.kappa)
+    # # Static plots for kappa/psi vs s
+    # kappaPlot = pg.PlotDataItem(
+    #         pen={'color': (196,78,82), 'width': 2},
+    #         name='kappa(s)'
+    #     )
+    # pathScope.axes[0].plot.addItem(kappaPlot)
+    # kappaPlot.setData(path.s, path.kappa)
 
-    psiPlot = pg.PlotDataItem(
-            pen={'color': (85,168,104), 'width': 2},
-            name='psi(s)'
-        )
-    pathScope.axes[1].plot.addItem(psiPlot)
-    psiPlot.setData(path.s, path.psi)
-    #endregion
+    # psiPlot = pg.PlotDataItem(
+    #         pen={'color': (85,168,104), 'width': 2},
+    #         name='psi(s)'
+    #     )
+    # pathScope.axes[1].plot.addItem(psiPlot)
+    # psiPlot.setData(path.s, path.psi)
+    # #endregion
 
     # PlotCurvature()
     #region : Setup threads, then run experiment

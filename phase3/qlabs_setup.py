@@ -111,46 +111,46 @@ def setup(
     else:
         xOff = 5.86
         yOff = -2.59
-        # Parking Lot Box
-        hBasicShape.spawn_id_box_walls_from_end_points(
-            actorNumber=0,
-            startLocation=[-14+xOff, 25+yOff, 0],
-            endLocation=[-14+xOff, 35+yOff, 0],
-            height=5,
-            thickness=10,
-            color=[1,0,0],
-            waitForConfirmation=False
-        )
+        # # Parking Lot Box
+        # hBasicShape.spawn_id_box_walls_from_end_points(
+        #     actorNumber=0,
+        #     startLocation=[-14+xOff, 25+yOff, 0],
+        #     endLocation=[-14+xOff, 35+yOff, 0],
+        #     height=5,
+        #     thickness=10,
+        #     color=[1,0,0],
+        #     waitForConfirmation=False
+        # )
 
-        # Plus
-        hBasicShape.spawn_id_box_walls_from_end_points(
-            actorNumber=2,
-            startLocation=[1+xOff, 2.5+yOff, 0],
-            endLocation=[10+xOff, 2.5+yOff, 0],
-            height=5,
-            thickness=2,
-            color=[1,0,0],
-            waitForConfirmation=False
-        )
-        hBasicShape.spawn_id_box_walls_from_end_points(
-            actorNumber=3,
-            startLocation=[5.5+xOff, 7+yOff, 0],
-            endLocation=[5.5+xOff, -2+yOff, -0],
-            height=5,
-            thickness=2,
-            color=[1,0,0],
-            waitForConfirmation=False
-        )
-        # Cylinder
-        hBasicShape.spawn_id_degrees(
-            actorNumber=4,
-            location=[9.9+xOff, 41+yOff, 0],
-            rotation=[0,0,45],
-            scale=[7, 7, 15],
-            configuration=hBasicShape.SHAPE_CYLINDER,
+        # # Plus
+        # hBasicShape.spawn_id_box_walls_from_end_points(
+        #     actorNumber=2,
+        #     startLocation=[1+xOff, 2.5+yOff, 0],
+        #     endLocation=[10+xOff, 2.5+yOff, 0],
+        #     height=5,
+        #     thickness=2,
+        #     color=[1,0,0],
+        #     waitForConfirmation=False
+        # )
+        # hBasicShape.spawn_id_box_walls_from_end_points(
+        #     actorNumber=3,
+        #     startLocation=[5.5+xOff, 7+yOff, 0],
+        #     endLocation=[5.5+xOff, -2+yOff, -0],
+        #     height=5,
+        #     thickness=2,
+        #     color=[1,0,0],
+        #     waitForConfirmation=False
+        # )
+        # # Cylinder
+        # hBasicShape.spawn_id_degrees(
+        #     actorNumber=4,
+        #     location=[9.9+xOff, 41+yOff, 0],
+        #     rotation=[0,0,45],
+        #     scale=[7, 7, 15],
+        #     configuration=hBasicShape.SHAPE_CYLINDER,
 
-            waitForConfirmation=True
-        )
+        #     waitForConfirmation=True
+        # )
 
 
 

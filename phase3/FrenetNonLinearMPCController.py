@@ -41,7 +41,7 @@ class FrenetNonlinearMPCController:
         if getattr(self.path, "v_ref", None) is not None:
             vref_seq = np.array([self.path.v_ref_at_s(sk) for sk in s_seq_full], dtype=float)
 
-        X_opt, U_opt = self.nmpc.solve(x0, kappa_seq, vref_seq_np=vref_seq)
+        X_opt, U_opt = self.nmpc.solve(x0, kappa_seq, delta_prev=self.delta_prev, vref_seq_np=vref_seq)
 
         delta_cmd = float(U_opt[0, 0])
         a_cmd = float(U_opt[0, 1])
